@@ -1,5 +1,5 @@
 import type { Task, Handoff } from "@agentswarm/core";
-import { createLogger, createBranch } from "@agentswarm/core";
+import { createLogger } from "@agentswarm/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { WorkerPool } from "./worker-pool.js";
@@ -213,10 +213,6 @@ export class Subplanner {
           this.mergeQueue.enqueue(subtask.branch);
         }
       }
-      const mergeResults = await this.mergeQueue.processQueue();
-      for (const r of mergeResults) {
-        this.monitor.recordMergeAttempt(r.success);
-      }
 
       return aggregateHandoffs(parentTask, subtasks, handoffs);
     } catch (error) {
@@ -381,11 +377,8 @@ export class Subplanner {
   private async dispatchToWorker(subtask: Task): Promise<{ subtask: Task; handoff: Handoff }> {
     await this.dispatchLimiter.acquire();
 
-    try {
-      await createBranch(subtask.branch, this.targetRepoPath);
-    } catch {
-      // Branch may already exist
-    }
+    // No local branch creation — branches are created inside sandboxes
+    // and pushed to remote. Merge queue fetches from origin.
 
     this.taskQueue.assignTask(subtask.id, `ephemeral-${subtask.id}`);
     this.taskQueue.startTask(subtask.id);

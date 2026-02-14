@@ -32,6 +32,7 @@ export class WorkerPool {
     llm: HarnessConfig["llm"];
     git: HarnessConfig["git"];
     pythonPath: string;
+    gitToken?: string;
   };
   private taskCompleteCallbacks: ((handoff: Handoff) => void)[];
   private workerFailedCallbacks: ((taskId: string, error: Error) => void)[];
@@ -43,6 +44,7 @@ export class WorkerPool {
       llm: HarnessConfig["llm"];
       git: HarnessConfig["git"];
       pythonPath: string;
+      gitToken?: string;
     },
     workerPrompt: string,
   ) {
@@ -77,11 +79,22 @@ export class WorkerPool {
 
     logger.info("Dispatching task to ephemeral sandbox", { taskId: task.id });
 
+    const endpoint = this.config.llm.endpoints[0];
+    const baseUrl = endpoint.endpoint.replace(/\/+$/, "");
+    const llmEndpointUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
+
     const payload = JSON.stringify({
       task,
       systemPrompt: this.workerPrompt,
       repoUrl: this.config.git.repoUrl,
-      llmConfig: this.config.llm,
+      gitToken: this.config.gitToken || process.env.GIT_TOKEN || "",
+      llmConfig: {
+        endpoint: llmEndpointUrl,
+        model: this.config.llm.model,
+        maxTokens: this.config.llm.maxTokens,
+        temperature: this.config.llm.temperature,
+        apiKey: endpoint.apiKey,
+      },
     });
 
     try {
@@ -91,7 +104,8 @@ export class WorkerPool {
         {
           cwd: process.cwd(),
           timeout: this.config.workerTimeout * 1000,
-          maxBuffer: 10 * 1024 * 1024, // 10MB — sandbox can produce verbose logs
+          // Worker stdout includes streamed logs + final JSON handoff; large diffs can be several MB
+          maxBuffer: 50 * 1024 * 1024,
         },
       );
 

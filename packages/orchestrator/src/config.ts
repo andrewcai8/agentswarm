@@ -70,7 +70,7 @@ export function loadConfig(): OrchestratorConfig {
   }
 
   cachedConfig = {
-    maxWorkers: Number(process.env.MAX_WORKERS) || 4,
+    maxWorkers: Number(process.env.MAX_WORKERS) || 100,
     workerTimeout: Number(process.env.WORKER_TIMEOUT) || 1800,
     mergeStrategy: mergeStrategy as "fast-forward" | "rebase" | "merge-commit",
     llm: {

@@ -130,6 +130,7 @@ export async function createOrchestrator(
 
   // --- Components ---
   const taskQueue = new TaskQueue();
+  const gitMutex = new GitMutex();
 
   const workerPool = new WorkerPool(
     {
@@ -138,6 +139,7 @@ export async function createOrchestrator(
       llm: config.llm,
       git: config.git,
       pythonPath: config.pythonPath,
+      gitToken: process.env.GIT_TOKEN,
     },
     workerPrompt,
   );
@@ -146,6 +148,7 @@ export async function createOrchestrator(
     mergeStrategy: config.mergeStrategy,
     mainBranch: config.git.mainBranch,
     repoPath: config.targetRepoPath,
+    gitMutex,
   });
 
   const monitor = new Monitor(
@@ -223,12 +226,22 @@ export async function createOrchestrator(
       await workerPool.start();
       monitor.start();
       reconciler.start();
+      mergeQueue.startBackground();
+      mergeQueue.onMergeResult((result) => {
+        monitor.recordMergeAttempt(result.success);
+        logger.info("Background merge result", {
+          branch: result.branch,
+          status: result.status,
+          success: result.success,
+        });
+      });
       logger.info("Orchestrator started");
     },
 
     async stop() {
       planner.stop();
       reconciler.stop();
+      mergeQueue.stopBackground();
       monitor.stop();
       await workerPool.stop();
       started = false;

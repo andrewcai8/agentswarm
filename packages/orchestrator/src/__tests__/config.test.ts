@@ -38,7 +38,7 @@ describe("config", () => {
       const config = loadConfig();
 
       // Verify defaults
-      assert.strictEqual(config.maxWorkers, 4);
+      assert.strictEqual(config.maxWorkers, 100);
       assert.strictEqual(config.workerTimeout, 1800);
       assert.strictEqual(config.mergeStrategy, "fast-forward");
       assert.strictEqual(config.llm.model, "glm-5");

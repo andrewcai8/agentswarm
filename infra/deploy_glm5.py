@@ -52,7 +52,7 @@ MINUTES = 60  # seconds
 
 REGION = "us"
 PROXY_REGIONS = ["us-east"]
-MIN_CONTAINERS = 0  # set to 1 for production
+MIN_CONTAINERS = 2  # keep warm — 16+ min cold start makes scale-to-zero impractical
 TARGET_INPUTS = 10
 
 # =============================================================================
@@ -134,7 +134,7 @@ def _start_server() -> subprocess.Popen:
     return subprocess.Popen(" ".join(cmd), shell=True, start_new_session=True)
 
 
-def _wait_for_server(timeout: int = 1200) -> None:
+def _wait_for_server(timeout: int = 1800) -> None:
     import requests as req_lib
 
     url = f"http://localhost:{SGLANG_PORT}/health"
@@ -176,7 +176,7 @@ app = modal.App("glm5-inference", image=image)
 @modal.experimental.http_server(
     port=SGLANG_PORT,
     proxy_regions=PROXY_REGIONS,
-    exit_grace_period=25,
+    exit_grace_period=5,
 )
 @modal.concurrent(target_inputs=TARGET_INPUTS)
 class GLM5:
@@ -188,9 +188,19 @@ class GLM5:
 
     @modal.exit()
     def stop(self):
+        import signal
+
         if hasattr(self, "proc") and self.proc:
-            self.proc.terminate()
-            self.proc.wait()
+            # SIGKILL immediately — preemption gives only 30s total, and
+            # exit_grace_period eats some of that. No time for graceful shutdown.
+            try:
+                os.killpg(os.getpgid(self.proc.pid), signal.SIGKILL)
+            except (ProcessLookupError, OSError):
+                pass
+            try:
+                self.proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                pass
 
 
 # =============================================================================

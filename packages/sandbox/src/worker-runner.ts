@@ -44,8 +44,19 @@ function writeResult(handoff: Handoff): void {
   log(`Result written to ${RESULT_PATH}`);
 }
 
-export function buildTaskPrompt(task: Task): string {
-  return [
+export function buildTaskPrompt(task: Task, systemPrompt?: string): string {
+  const parts: string[] = [];
+
+  if (systemPrompt) {
+    parts.push(
+      "<system_instructions>",
+      systemPrompt,
+      "</system_instructions>",
+      "",
+    );
+  }
+
+  parts.push(
     `## Task: ${task.id}`,
     `**Description:** ${task.description}`,
     `**Scope (files to focus on):** ${task.scope.join(", ")}`,
@@ -53,7 +64,9 @@ export function buildTaskPrompt(task: Task): string {
     `**Branch:** ${task.branch}`,
     "",
     "Complete this task. Commit your changes when done. Stay focused on the scoped files.",
-  ].join("\n");
+  );
+
+  return parts.join("\n");
 }
 
 export async function runWorker(): Promise<void> {
@@ -62,14 +75,14 @@ export async function runWorker(): Promise<void> {
   log("Reading task payload...");
   const raw = readFileSync(TASK_PATH, "utf-8");
   const payload: TaskPayload = JSON.parse(raw);
-  const { task, llmConfig } = payload;
+  const { task, systemPrompt, llmConfig } = payload;
   log(`Task: ${task.id} — ${task.description.slice(0, 80)}`);
 
   const authStorage = new AuthStorage();
   const modelRegistry = new ModelRegistry(authStorage);
   modelRegistry.registerProvider("glm5", {
     baseUrl: llmConfig.endpoint,
-    apiKey: llmConfig.apiKey ?? "",
+    apiKey: llmConfig.apiKey || "no-key-needed", // Pi SDK requires a non-empty string
     api: "openai-completions",
     models: [{
       id: llmConfig.model,
@@ -92,6 +105,7 @@ export async function runWorker(): Promise<void> {
   }
   log(`Model registered: ${llmConfig.model} via ${llmConfig.endpoint}`);
 
+  const startSha = safeExec("git rev-parse HEAD", WORK_DIR);
   log("Creating agent session...");
   const { session } = await createAgentSession({
     cwd: WORK_DIR,
@@ -110,7 +124,7 @@ export async function runWorker(): Promise<void> {
   session.subscribe((event) => {
     if (event.type === "tool_execution_start") {
       toolCallCount++;
-      if (toolCallCount % 10 === 0) {
+      if (toolCallCount % 5 === 0) {
         log(`Tool calls: ${toolCallCount}`);
       }
     }
@@ -118,14 +132,29 @@ export async function runWorker(): Promise<void> {
       const msg = event.message;
       if (msg && typeof msg === "object" && "role" in msg && msg.role === "assistant") {
         const content = "content" in msg ? msg.content : undefined;
-        if (typeof content === "string") {
-          lastAssistantMessage = content;
+        if (Array.isArray(content)) {
+          const textParts: string[] = [];
+          for (const part of content) {
+            if (
+              typeof part === "object" &&
+              part !== null &&
+              "type" in part &&
+              part.type === "text" &&
+              "text" in part &&
+              typeof part.text === "string"
+            ) {
+              textParts.push(part.text);
+            }
+          }
+          if (textParts.length > 0) {
+            lastAssistantMessage = textParts.join("\n");
+          }
         }
       }
     }
   });
 
-  const prompt = buildTaskPrompt(task);
+  const prompt = buildTaskPrompt(task, systemPrompt);
   log("Running agent prompt...");
   await session.prompt(prompt);
   log("Agent prompt completed.");
@@ -136,10 +165,10 @@ export async function runWorker(): Promise<void> {
   session.dispose();
 
   log("Extracting git diff stats...");
-  const diff = safeExec("git diff HEAD~1 --no-color", WORK_DIR);
-  const numstat = safeExec("git diff HEAD~1 --numstat", WORK_DIR);
-  const filesCreatedRaw = safeExec("git diff HEAD~1 --diff-filter=A --name-only", WORK_DIR);
-  const filesChangedRaw = safeExec("git diff HEAD~1 --name-only", WORK_DIR);
+  const diff = safeExec(`git diff ${startSha} --no-color`, WORK_DIR);
+  const numstat = safeExec(`git diff ${startSha} --numstat`, WORK_DIR);
+  const filesCreatedRaw = safeExec(`git diff ${startSha} --diff-filter=A --name-only`, WORK_DIR);
+  const filesChangedRaw = safeExec(`git diff ${startSha} --name-only`, WORK_DIR);
 
   const filesChanged = filesChangedRaw ? filesChangedRaw.split("\n").filter(Boolean) : [];
   const filesCreated = filesCreatedRaw ? filesCreatedRaw.split("\n").filter(Boolean) : [];

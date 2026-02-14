@@ -20,6 +20,10 @@ Usage:
 """
 
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import modal
 
@@ -54,7 +58,6 @@ def run_task(payload: dict) -> dict:
     sb = None
 
     try:
-        # 1. Create sandbox
         sb = modal.Sandbox.create(
             app=app,
             image=image,
@@ -63,35 +66,55 @@ def run_task(payload: dict) -> dict:
         )
         print(f"[spawn] sandbox created for task {task_id}")
 
-        # 2. Write task payload into sandbox
         f = sb.open("/workspace/task.json", "w")
         f.write(json.dumps(payload))
         f.close()
 
-        # 3. Clone repo
+        # Build clone URL with token for push access
+        repo_url = payload["repoUrl"]
+        git_token = payload.get("gitToken", "")
+        if git_token and "github.com" in repo_url:
+            # Embed token: https://x-access-token:TOKEN@github.com/org/repo.git
+            authed_url = repo_url.replace(
+                "https://github.com",
+                f"https://x-access-token:{git_token}@github.com",
+            )
+        else:
+            authed_url = repo_url
+
+        # Full clone (no --depth 1) so git diff against startSha works in worker-runner
         clone = sb.exec(
-            "git", "clone", "--depth", "1", payload["repoUrl"], "/workspace/repo",
+            "git", "clone", authed_url, "/workspace/repo",
             timeout=120,
         )
         clone.wait()
 
-        # 4. Create task branch
         branch = task["branch"]
         branch_proc = sb.exec(
             "git", "-C", "/workspace/repo", "checkout", "-b", branch,
         )
         branch_proc.wait()
 
-        # 5. Execute worker-runner
         process = sb.exec("node", "/agent/worker-runner.js", timeout=1800)
 
-        # 6. Stream stdout for logging
         for line in process.stdout:
             print(f"[worker:{task_id}] {line}", end="")
+        for line in process.stderr:
+            print(f"[worker:{task_id}] {line}", end="", file=sys.stderr)
 
         process.wait()
 
-        # 7. Read result
+        # Push branch to remote so merge-queue can fetch it
+        if git_token:
+            push_proc = sb.exec(
+                "git", "-C", "/workspace/repo", "push", "origin", branch,
+                timeout=120,
+            )
+            push_proc.wait()
+            print(f"[spawn] pushed branch {branch} to origin")
+        else:
+            print(f"[spawn] WARNING: no GIT_TOKEN, skipping push for {branch}")
+
         f = sb.open("/workspace/result.json", "r")
         result = json.loads(f.read())
         f.close()
@@ -133,8 +156,6 @@ def run_task(payload: dict) -> dict:
 # CLI entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import sys
-
     payload = json.loads(sys.argv[1])
     result = run_task(payload)
     print(json.dumps(result))

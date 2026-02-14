@@ -1,27 +1,22 @@
-/**
- * Root Planner - LLM-powered task decomposition and orchestration
- */
-
 import type { Task, Handoff } from "@agentswarm/core";
-import { createLogger, createBranch } from "@agentswarm/core";
+import { createLogger } from "@agentswarm/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { LLMClient, type LLMMessage } from "./llm-client.js";
-import { type RepoState, type RawTaskInput, readRepoState, parseLLMTaskArray, ConcurrencyLimiter } from "./shared.js";
+import { type RepoState, readRepoState, parseLLMTaskArray, ConcurrencyLimiter } from "./shared.js";
 
 const logger = createLogger("planner", "root-planner");
+
+const LOOP_SLEEP_MS = 500;
+const MIN_HANDOFFS_FOR_REPLAN = 3;
 
 export interface PlannerConfig {
   maxIterations: number;
 }
 
-/**
- * Root planner that decomposes work into tasks using LLM,
- * dispatches them to workers, and collects handoffs
- */
 export class Planner {
   private config: OrchestratorConfig;
   private plannerConfig: PlannerConfig;
@@ -36,6 +31,11 @@ export class Planner {
   private running: boolean;
   private taskCounter: number;
   private dispatchLimiter: ConcurrencyLimiter;
+
+  private pendingHandoffs: { task: Task; handoff: Handoff }[];
+  private allHandoffs: Handoff[];
+  private handoffsSinceLastPlan: Handoff[];
+  private activeTasks: Set<string>;
 
   private taskCreatedCallbacks: ((task: Task) => void)[];
   private taskCompletedCallbacks: ((task: Task, handoff: Handoff) => void)[];
@@ -64,6 +64,11 @@ export class Planner {
     this.taskCounter = 0;
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
 
+    this.pendingHandoffs = [];
+    this.allHandoffs = [];
+    this.handoffsSinceLastPlan = [];
+    this.activeTasks = new Set();
+
     this.llmClient = new LLMClient({
       endpoints: config.llm.endpoints,
       model: config.llm.model,
@@ -77,78 +82,82 @@ export class Planner {
     this.errorCallbacks = [];
   }
 
-  /**
-   * Run the main planning loop
-   */
+  /** Streaming planning loop: dispatch tasks immediately, collect handoffs, replan when 3+ complete. */
   async runLoop(request: string): Promise<void> {
     this.running = true;
-    logger.info("Starting planner loop", { request: request.slice(0, 200) });
+    logger.info("Starting streaming planner loop", { request: request.slice(0, 200) });
 
     let iteration = 0;
-    let allHandoffs: Handoff[] = [];
+    let planningDone = false;
 
     while (this.running && iteration < this.plannerConfig.maxIterations) {
-      iteration++;
-      logger.info(`Planning iteration ${iteration}`);
-
       try {
-        const repoState = await this.readRepoState();
+        this.collectCompletedHandoffs();
 
-        const tasks = await this.plan(request, repoState, allHandoffs);
+        const hasCapacity = this.dispatchLimiter.getActive() < this.config.maxWorkers;
+        const hasEnoughHandoffs = this.handoffsSinceLastPlan.length >= MIN_HANDOFFS_FOR_REPLAN;
+        const noActiveWork = this.activeTasks.size === 0 && iteration > 0;
+        const needsPlan = hasCapacity && (iteration === 0 || hasEnoughHandoffs || noActiveWork);
 
-        if (tasks.length === 0) {
-          logger.info("No more tasks to create. Planning complete.");
+        if (needsPlan && !planningDone) {
+          iteration++;
+          logger.info(`Planning iteration ${iteration}`, {
+            activeWorkers: this.dispatchLimiter.getActive(),
+            handoffsSinceLastPlan: this.handoffsSinceLastPlan.length,
+          });
+
+          const repoState = await this.readRepoState();
+          const tasks = await this.plan(request, repoState, this.allHandoffs);
+
+          // Capture before reset so callbacks receive the actual handoffs that triggered this plan
+          const recentHandoffs = [...this.handoffsSinceLastPlan];
+          this.handoffsSinceLastPlan = [];
+
+          if (tasks.length === 0 && this.activeTasks.size === 0) {
+            logger.info("No more tasks to create and no active work. Planning complete.");
+            planningDone = true;
+          } else if (tasks.length > 0) {
+            logger.info(`Created ${tasks.length} tasks for iteration ${iteration}`);
+            this.dispatchTasks(tasks);
+
+            for (const cb of this.iterationCompleteCallbacks) {
+              cb(iteration, tasks, recentHandoffs);
+            }
+          }
+        }
+
+        if (planningDone && this.activeTasks.size === 0) {
           break;
         }
 
-        logger.info(`Created ${tasks.length} tasks for iteration ${iteration}`);
-
-        const handoffs = await this.executeTasks(tasks);
-        allHandoffs.push(...handoffs);
-
-        for (const task of tasks) {
-          const taskObj = this.taskQueue.getById(task.id);
-          if (taskObj?.status === "complete") {
-            this.mergeQueue.enqueue(task.branch);
-          }
-        }
-        const mergeResults = await this.mergeQueue.processQueue();
-        for (const r of mergeResults) {
-          this.monitor.recordMergeAttempt(r.success);
-          logger.info("Merge result", {
-            branch: r.branch,
-            status: r.status,
-            success: r.success,
-          });
-        }
-
-        for (const cb of this.iterationCompleteCallbacks) {
-          cb(iteration, tasks, handoffs);
-        }
+        await sleep(LOOP_SLEEP_MS);
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         logger.error(`Error in planning iteration ${iteration}`, { error: err.message });
         for (const cb of this.errorCallbacks) {
           cb(err);
         }
+        await sleep(LOOP_SLEEP_MS);
+      }
+    }
+
+    if (this.activeTasks.size > 0) {
+      logger.info("Waiting for remaining active tasks", { count: this.activeTasks.size });
+      while (this.activeTasks.size > 0 && this.running) {
+        this.collectCompletedHandoffs();
+        await sleep(LOOP_SLEEP_MS);
       }
     }
 
     this.running = false;
-    logger.info("Planner loop finished", { iterations: iteration, totalHandoffs: allHandoffs.length });
+    logger.info("Planner loop finished", { iterations: iteration, totalHandoffs: this.allHandoffs.length });
   }
 
-  /**
-   * Stop the planning loop
-   */
   stop(): void {
     this.running = false;
     logger.info("Planner stop requested");
   }
 
-  /**
-   * Check if planner is running
-   */
   isRunning(): boolean {
     return this.running;
   }
@@ -157,9 +166,6 @@ export class Planner {
     return readRepoState(this.targetRepoPath);
   }
 
-  /**
-   * Use LLM to decompose request into tasks
-   */
   async plan(request: string, repoState: RepoState, previousHandoffs: Handoff[]): Promise<Task[]> {
     let userMessage = `## Request\n${request}\n\n`;
     userMessage += `## Repository File Tree\n${repoState.fileTree.join("\n")}\n\n`;
@@ -211,108 +217,130 @@ export class Planner {
     return tasks;
   }
 
-  /**
-   * Execute tasks by enqueueing and assigning to workers
-   */
-  async executeTasks(tasks: Task[]): Promise<Handoff[]> {
-    // Enqueue all tasks
+  private dispatchTasks(tasks: Task[]): void {
     for (const task of tasks) {
       this.taskQueue.enqueue(task);
       for (const cb of this.taskCreatedCallbacks) {
         cb(task);
       }
+
+      this.activeTasks.add(task.id);
+      this.dispatchSingleTask(task);
     }
-
-    // Process tasks - assign to available workers
-    const handoffPromises: Promise<{ task: Task; handoff: Handoff }>[] = [];
-
-    for (const task of tasks) {
-      const promise = (async () => {
-        await this.dispatchLimiter.acquire();
-
-        try {
-          await createBranch(task.branch, this.targetRepoPath);
-        } catch {
-          // Branch may already exist
-        }
-
-        this.taskQueue.assignTask(task.id, `ephemeral-${task.id}`);
-        this.taskQueue.startTask(task.id);
-
-        try {
-          const handoff = await this.workerPool.assignTask(task);
-
-          // Check for empty diff
-          if (handoff.filesChanged.length === 0) {
-            this.monitor.recordEmptyDiff(task.assignedTo || "unknown", task.id);
-          }
-
-          // Update task status based on handoff
-          if (handoff.status === "complete") {
-            this.taskQueue.completeTask(task.id);
-          } else {
-            this.taskQueue.failTask(task.id);
-          }
-
-          // Record token usage
-          this.monitor.recordTokenUsage(handoff.metrics.tokensUsed);
-
-          // Fire callback
-          for (const cb of this.taskCompletedCallbacks) {
-            cb(task, handoff);
-          }
-
-          return { task, handoff };
-        } catch (error) {
-          this.taskQueue.failTask(task.id);
-          const err = error instanceof Error ? error : new Error(String(error));
-          throw err;
-        } finally {
-          this.dispatchLimiter.release();
-        }
-      })();
-
-      handoffPromises.push(promise);
-    }
-
-    // Wait for all tasks to complete
-    const results = await Promise.allSettled(handoffPromises);
-    const handoffs: Handoff[] = [];
-
-    for (const result of results) {
-      if (result.status === "fulfilled") {
-        handoffs.push(result.value.handoff);
-      }
-    }
-
-    return handoffs;
   }
 
-  /**
-   * Register callback for task creation
-   */
+  /** Fire-and-forget: dispatches task to a worker, pushes result to pendingHandoffs on completion. */
+  private dispatchSingleTask(task: Task): void {
+    const promise = (async () => {
+      await this.dispatchLimiter.acquire();
+
+      // No local branch creation — branches are created inside sandboxes
+      // and pushed to remote. Merge queue fetches from origin.
+
+      this.taskQueue.assignTask(task.id, `ephemeral-${task.id}`);
+      this.taskQueue.startTask(task.id);
+
+      try {
+        const handoff = await this.workerPool.assignTask(task);
+
+        if (handoff.filesChanged.length === 0) {
+          const workerId = this.taskQueue.getById(task.id)?.assignedTo || "unknown";
+          this.monitor.recordEmptyDiff(workerId, task.id);
+        }
+
+        if (handoff.status === "complete") {
+          this.taskQueue.completeTask(task.id);
+        } else {
+          this.taskQueue.failTask(task.id);
+        }
+
+        this.monitor.recordTokenUsage(handoff.metrics.tokensUsed);
+
+        for (const cb of this.taskCompletedCallbacks) {
+          cb(task, handoff);
+        }
+
+        this.pendingHandoffs.push({ task, handoff });
+      } catch (error) {
+        this.taskQueue.failTask(task.id);
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error("Task dispatch failed", { taskId: task.id, error: err.message });
+
+        const failureHandoff: Handoff = {
+          taskId: task.id,
+          status: "failed",
+          summary: `Worker failed: ${err.message}`,
+          diff: "",
+          filesChanged: [],
+          concerns: [err.message],
+          suggestions: ["Retry the task"],
+          metrics: {
+            linesAdded: 0,
+            linesRemoved: 0,
+            filesCreated: 0,
+            filesModified: 0,
+            tokensUsed: 0,
+            toolCallCount: 0,
+            durationMs: 0,
+          },
+        };
+        this.pendingHandoffs.push({ task, handoff: failureHandoff });
+      } finally {
+        this.dispatchLimiter.release();
+        this.activeTasks.delete(task.id);
+      }
+    })();
+
+    promise.catch((error) => {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error("Unhandled dispatch error", { taskId: task.id, error: err.message });
+      this.activeTasks.delete(task.id);
+      for (const cb of this.errorCallbacks) {
+        cb(err);
+      }
+    });
+  }
+
+  /** Drains pendingHandoffs (populated by dispatchSingleTask) into allHandoffs + merge queue. */
+  private collectCompletedHandoffs(): void {
+    while (this.pendingHandoffs.length > 0) {
+      const completed = this.pendingHandoffs.shift();
+      if (!completed) break;
+
+      const { task, handoff } = completed;
+
+      this.allHandoffs.push(handoff);
+      this.handoffsSinceLastPlan.push(handoff);
+
+      if (handoff.status === "complete") {
+        this.mergeQueue.enqueue(task.branch);
+      }
+
+      logger.info("Collected handoff", {
+        taskId: task.id,
+        status: handoff.status,
+        filesChanged: handoff.filesChanged.length,
+      });
+    }
+  }
+
   onTaskCreated(callback: (task: Task) => void): void {
     this.taskCreatedCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for task completion
-   */
   onTaskCompleted(callback: (task: Task, handoff: Handoff) => void): void {
     this.taskCompletedCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for iteration completion
-   */
   onIterationComplete(callback: (iteration: number, tasks: Task[], handoffs: Handoff[]) => void): void {
     this.iterationCompleteCallbacks.push(callback);
   }
 
-  /**
-   * Register callback for errors
-   */
   onError(callback: (error: Error) => void): void {
     this.errorCallbacks.push(callback);
   }
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

@@ -1,3 +1,5 @@
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import type { HarnessConfig } from "@agentswarm/core";
 import {
   checkoutBranch,
@@ -5,6 +7,9 @@ import {
   getConflicts,
   createLogger,
 } from "@agentswarm/core";
+import type { GitMutex } from "./shared.js";
+
+const execFileAsync = promisify(execFile);
 
 export type MergeStrategy = HarnessConfig["mergeStrategy"];
 
@@ -24,9 +29,6 @@ export interface MergeStats {
 }
 
 async function abortMerge(cwd: string): Promise<void> {
-  const { execFile } = await import("node:child_process");
-  const { promisify } = await import("node:util");
-  const execFileAsync = promisify(execFile);
   try {
     await execFileAsync("git", ["merge", "--abort"], { cwd });
   } catch {
@@ -47,11 +49,17 @@ export class MergeQueue {
   private mergeStrategy: MergeStrategy;
   private mainBranch: string;
   private repoPath: string;
+  private gitMutex: GitMutex | null;
+
+  private backgroundTimer: ReturnType<typeof setTimeout> | null;
+  private backgroundRunning: boolean;
+  private mergeResultCallbacks: ((result: MergeQueueResult) => void)[];
 
   constructor(config: {
     mergeStrategy: MergeStrategy;
     mainBranch: string;
     repoPath: string;
+    gitMutex?: GitMutex;
   }) {
     this.queue = [];
     this.merged = new Set();
@@ -64,6 +72,11 @@ export class MergeQueue {
     this.mergeStrategy = config.mergeStrategy;
     this.mainBranch = config.mainBranch;
     this.repoPath = config.repoPath;
+    this.gitMutex = config.gitMutex ?? null;
+
+    this.backgroundTimer = null;
+    this.backgroundRunning = false;
+    this.mergeResultCallbacks = [];
   }
 
   enqueue(branch: string): void {
@@ -93,6 +106,54 @@ export class MergeQueue {
     return this.queue.length;
   }
 
+  startBackground(intervalMs: number = 5_000): void {
+    if (this.backgroundRunning) return;
+    this.backgroundRunning = true;
+    logger.info("Background merge queue started", { intervalMs });
+
+    const tick = async (): Promise<void> => {
+      if (!this.backgroundRunning) return;
+
+      try {
+        while (this.queue.length > 0 && this.backgroundRunning) {
+          const branch = this.dequeue();
+          if (branch) {
+            const result = await this.mergeBranch(branch);
+            for (const cb of this.mergeResultCallbacks) {
+              cb(result);
+            }
+          }
+        }
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : String(error);
+        logger.error("Background merge tick error", { error: msg });
+      }
+
+      if (this.backgroundRunning) {
+        this.backgroundTimer = setTimeout(() => void tick(), intervalMs);
+      }
+    };
+
+    this.backgroundTimer = setTimeout(() => void tick(), intervalMs);
+  }
+
+  stopBackground(): void {
+    this.backgroundRunning = false;
+    if (this.backgroundTimer) {
+      clearTimeout(this.backgroundTimer);
+      this.backgroundTimer = null;
+    }
+    logger.info("Background merge queue stopped");
+  }
+
+  isBackgroundRunning(): boolean {
+    return this.backgroundRunning;
+  }
+
+  onMergeResult(callback: (result: MergeQueueResult) => void): void {
+    this.mergeResultCallbacks.push(callback);
+  }
+
   async processQueue(): Promise<MergeQueueResult[]> {
     const results: MergeQueueResult[] = [];
 
@@ -112,11 +173,21 @@ export class MergeQueue {
 
     logger.info(`Attempting to merge branch ${branch} into ${this.mainBranch}`);
 
+    if (this.gitMutex) {
+      await this.gitMutex.acquire();
+    }
+
     try {
-      // 1. Checkout main branch
+      // Fetch the branch from origin (workers push branches to remote)
+      try {
+        await execFileAsync("git", ["fetch", "origin", branch], { cwd });
+      } catch (fetchError) {
+        const fetchMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        logger.warn(`Failed to fetch branch ${branch} from origin, trying local`, { error: fetchMsg });
+      }
+
       await checkoutBranch(this.mainBranch, cwd);
 
-      // 2. Attempt merge using configured strategy
       const result = await coreMergeBranch(branch, this.mainBranch, this.mergeStrategy, cwd);
 
       if (result.success) {
@@ -141,7 +212,6 @@ export class MergeQueue {
         };
       }
 
-      // Merge failed for other reason
       this.stats.totalFailed++;
       logger.error(`Failed to merge branch ${branch}: ${result.message}`);
       return { success: false, status: "failed", branch, message: result.message };
@@ -150,7 +220,6 @@ export class MergeQueue {
       const msg = error instanceof Error ? error.message : String(error);
       logger.error(`Error merging branch ${branch}: ${msg}`);
 
-      // Try to restore main branch on failure
       try {
         await checkoutBranch(this.mainBranch, cwd);
       } catch {
@@ -158,6 +227,10 @@ export class MergeQueue {
       }
 
       return { success: false, status: "failed", branch, message: msg };
+    } finally {
+      if (this.gitMutex) {
+        this.gitMutex.release();
+      }
     }
   }
 

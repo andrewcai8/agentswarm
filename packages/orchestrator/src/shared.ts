@@ -76,6 +76,20 @@ export class ConcurrencyLimiter {
   }
 }
 
+/**
+ * Serializes local git operations to prevent index.lock contention
+ * when multiple concurrent tasks touch the same repository.
+ */
+export class GitMutex extends ConcurrencyLimiter {
+  constructor() {
+    super(1);
+  }
+
+  isLocked(): boolean {
+    return this.getActive() > 0;
+  }
+}
+
 export function parseLLMTaskArray(content: string): RawTaskInput[] {
   let cleaned = content.trim();
 

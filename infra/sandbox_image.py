@@ -9,6 +9,7 @@ Each sandbox gets a copy of this image with:
 - Python 3.12 (for scripting)
 - Common dev tools (curl, wget, ripgrep, jq, tree)
 - The @agentswarm/sandbox package (the agent itself)
+- Pi coding agent SDK (@mariozechner/pi-coding-agent)
 
 Usage:
     from infra.sandbox_image import create_agent_image
@@ -87,9 +88,10 @@ def create_agent_image() -> modal.Image:
     return image
 
 
-def create_agent_image_with_sandbox_package() -> modal.Image:
+def create_worker_image() -> modal.Image:
     """
-    Extended image that includes the pre-built @agentswarm/sandbox package.
+    Extended image that includes the pre-built @agentswarm/sandbox package
+    and the Pi coding agent SDK.
     
     Call this after packages/sandbox has been built locally.
     Copies the compiled sandbox agent code into the image.
@@ -109,9 +111,14 @@ def create_agent_image_with_sandbox_package() -> modal.Image:
         # Copy sandbox package
         .add_local_dir(str(sandbox_dist), "/agent/packages/sandbox/dist", copy=True)
         .add_local_file(str(sandbox_pkg), "/agent/packages/sandbox/package.json", copy=True)
-        # Install dependencies
+        # Install Pi coding agent SDK globally
+        .run_commands("npm install -g @mariozechner/pi-coding-agent@0.52.0")
+        # Link @agentswarm/core so sandbox can resolve it
+        # (both packages are pre-built JS with zero runtime deps — no npm install needed)
         .run_commands(
-            "cd /agent && npm install --production",
+            "mkdir -p /agent/node_modules/@agentswarm",
+            "ln -s /agent/packages/core /agent/node_modules/@agentswarm/core",
+            "ln -s /agent/packages/sandbox/dist/worker-runner.js /agent/worker-runner.js",
         )
     )
     

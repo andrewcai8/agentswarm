@@ -35,7 +35,7 @@ sys.path.insert(0, str(REPO_ROOT))
 import modal
 import aiohttp
 
-from infra.sandbox_image import create_agent_image, create_agent_image_with_sandbox_package
+from infra.sandbox_image import create_agent_image, create_worker_image
 
 
 # =============================================================================
@@ -177,7 +177,7 @@ async def test_agent_server():
         return False
 
     app = modal.App.lookup("agentswarm-test", create_if_missing=True)
-    image = create_agent_image_with_sandbox_package()
+    image = create_worker_image()
     port = 8080
 
     print("Creating sandbox with agent server...")
@@ -187,7 +187,7 @@ async def test_agent_server():
         image=image,
         timeout=300,
         encrypted_ports=[port],
-        environment_variables={
+        env={
             "PORT": str(port),
             "SANDBOX_ID": "test-sandbox-001",
         },
@@ -197,8 +197,8 @@ async def test_agent_server():
         # Start the server in background
         print("  Starting agent server...")
         sb.exec(
-            "node", "/agent/packages/sandbox/dist/server.js",
-            background=True,
+            "bash", "-c",
+            "nohup node /agent/packages/sandbox/dist/server.js > /tmp/server.log 2>&1 &",
         )
 
         # Get tunnel URL
@@ -293,7 +293,7 @@ async def test_full_agent(glm5_endpoint: str):
         return False
 
     app = modal.App.lookup("agentswarm-test", create_if_missing=True)
-    image = create_agent_image_with_sandbox_package()
+    image = create_worker_image()
     port = 8080
 
     print("Creating sandbox...")
@@ -303,7 +303,7 @@ async def test_full_agent(glm5_endpoint: str):
         image=image,
         timeout=600,
         encrypted_ports=[port],
-        environment_variables={
+        env={
             "PORT": str(port),
             "SANDBOX_ID": "test-full-001",
         },
@@ -325,8 +325,8 @@ async def test_full_agent(glm5_endpoint: str):
 
         # Start agent server
         sb.exec(
-            "node", "/agent/packages/sandbox/dist/server.js",
-            background=True,
+            "bash", "-c",
+            "nohup node /agent/packages/sandbox/dist/server.js > /tmp/server.log 2>&1 &",
         )
 
         # Wait for server

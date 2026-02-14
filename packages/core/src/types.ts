@@ -53,28 +53,33 @@ export interface SandboxStatus {
   url?: string;                  // Tunnel URL for HTTP access
 }
 
-// Configuration for the harness
+export interface LLMEndpoint {
+  name: string;
+  endpoint: string;
+  apiKey?: string;
+  weight: number;
+}
+
 export interface HarnessConfig {
-  maxWorkers: number;           // Max concurrent sandboxes
-  workerTimeout: number;        // Worker timeout in seconds
+  maxWorkers: number;
+  workerTimeout: number;
   mergeStrategy: "fast-forward" | "rebase" | "merge-commit";
   llm: {
-    endpoint: string;           // GLM-5 API endpoint URL
-    model: string;              // Model name (e.g. "glm-5")
+    endpoints: LLMEndpoint[];
+    model: string;
     maxTokens: number;
     temperature: number;
-    apiKey?: string;            // API key for authenticated endpoints (e.g. RunPod)
   };
   git: {
-    repoUrl: string;            // Target repo URL
-    mainBranch: string;         // Usually "main"
-    branchPrefix: string;       // e.g. "worker/"
+    repoUrl: string;
+    mainBranch: string;
+    branchPrefix: string;
   };
   sandbox: {
-    imageTag: string;           // Modal image tag
+    imageTag: string;
     cpuCores: number;
     memoryMb: number;
-    idleTimeout: number;        // Seconds before auto-terminate
+    idleTimeout: number;
   };
 }
 

@@ -97,12 +97,13 @@ describe("config", () => {
     });
   });
 
-  it("throws on missing LLM_BASE_URL", () => {
+  it("throws on missing LLM endpoints", () => {
     withEnv({ GIT_REPO_URL: REQUIRED_ENV.GIT_REPO_URL }, () => {
       delete process.env.LLM_BASE_URL;
+      delete process.env.LLM_ENDPOINTS;
       assert.throws(
         () => loadConfig(),
-        (err: Error) => err.message === "Missing required env: LLM_BASE_URL"
+        (err: Error) => err.message.includes("Missing required env: LLM_ENDPOINTS")
       );
     });
   });
@@ -117,32 +118,48 @@ describe("config", () => {
     });
   });
 
-  it("normalizes LLM_BASE_URL - strips trailing slash and /v1 suffix", () => {
+  it("parses LLM_BASE_URL as single endpoint with normalization", () => {
     withEnv({ ...REQUIRED_ENV, LLM_BASE_URL: "https://pod-abc123-8000.proxy.runpod.net/v1/" }, () => {
       const config = loadConfig();
-      assert.strictEqual(config.llm.endpoint, "https://pod-abc123-8000.proxy.runpod.net");
+      assert.strictEqual(config.llm.endpoints.length, 1);
+      assert.strictEqual(config.llm.endpoints[0].endpoint, "https://pod-abc123-8000.proxy.runpod.net");
+      assert.strictEqual(config.llm.endpoints[0].name, "default");
+      assert.strictEqual(config.llm.endpoints[0].weight, 100);
     });
   });
 
-  it("normalizes LLM_BASE_URL - no /v1 suffix passes through", () => {
-    withEnv({ ...REQUIRED_ENV, LLM_BASE_URL: "https://pod-abc123-8000.proxy.runpod.net" }, () => {
+  it("parses LLM_ENDPOINTS as multi-endpoint JSON", () => {
+    const endpoints = JSON.stringify([
+      { name: "modal-b200", endpoint: "https://modal.example.com/v1", weight: 65 },
+      { name: "runpod-h200", endpoint: "https://runpod.example.com", apiKey: "key123", weight: 35 },
+    ]);
+    withEnv({ GIT_REPO_URL: REQUIRED_ENV.GIT_REPO_URL, LLM_ENDPOINTS: endpoints }, () => {
       const config = loadConfig();
-      assert.strictEqual(config.llm.endpoint, "https://pod-abc123-8000.proxy.runpod.net");
+      assert.strictEqual(config.llm.endpoints.length, 2);
+      assert.strictEqual(config.llm.endpoints[0].name, "modal-b200");
+      assert.strictEqual(config.llm.endpoints[0].endpoint, "https://modal.example.com");
+      assert.strictEqual(config.llm.endpoints[0].weight, 65);
+      assert.strictEqual(config.llm.endpoints[1].name, "runpod-h200");
+      assert.strictEqual(config.llm.endpoints[1].apiKey, "key123");
+      assert.strictEqual(config.llm.endpoints[1].weight, 35);
     });
   });
 
-  it("LLM_API_KEY defaults to empty string when not set", () => {
-    withEnv(REQUIRED_ENV, () => {
-      delete process.env.LLM_API_KEY;
+  it("LLM_ENDPOINTS takes priority over LLM_BASE_URL", () => {
+    const endpoints = JSON.stringify([
+      { name: "primary", endpoint: "https://primary.example.com", weight: 100 },
+    ]);
+    withEnv({ ...REQUIRED_ENV, LLM_ENDPOINTS: endpoints }, () => {
       const config = loadConfig();
-      assert.strictEqual(config.llm.apiKey, "");
+      assert.strictEqual(config.llm.endpoints.length, 1);
+      assert.strictEqual(config.llm.endpoints[0].name, "primary");
     });
   });
 
-  it("LLM_API_KEY is used when set", () => {
+  it("LLM_API_KEY is attached to single endpoint from LLM_BASE_URL", () => {
     withEnv({ ...REQUIRED_ENV, LLM_API_KEY: "my-secret-key" }, () => {
       const config = loadConfig();
-      assert.strictEqual(config.llm.apiKey, "my-secret-key");
+      assert.strictEqual(config.llm.endpoints[0].apiKey, "my-secret-key");
     });
   });
 

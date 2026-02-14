@@ -65,11 +65,10 @@ export class Planner {
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
 
     this.llmClient = new LLMClient({
-      endpoint: config.llm.endpoint,
+      endpoints: config.llm.endpoints,
       model: config.llm.model,
       maxTokens: config.llm.maxTokens,
       temperature: config.llm.temperature,
-      apiKey: config.llm.apiKey,
     });
 
     this.taskCreatedCallbacks = [];
@@ -116,6 +115,11 @@ export class Planner {
         const mergeResults = await this.mergeQueue.processQueue();
         for (const r of mergeResults) {
           this.monitor.recordMergeAttempt(r.success);
+          logger.info("Merge result", {
+            branch: r.branch,
+            status: r.status,
+            success: r.success,
+          });
         }
 
         for (const cb of this.iterationCompleteCallbacks) {

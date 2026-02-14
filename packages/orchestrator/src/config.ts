@@ -1,4 +1,4 @@
-import type { HarnessConfig } from "@agentswarm/core";
+import type { HarnessConfig, LLMEndpoint } from "@agentswarm/core";
 
 export interface OrchestratorConfig extends HarnessConfig {
   targetRepoPath: string;
@@ -8,17 +8,54 @@ export interface OrchestratorConfig extends HarnessConfig {
 
 const ALLOWED_MERGE_STRATEGIES = ["fast-forward", "rebase", "merge-commit"] as const;
 
+function normalizeUrl(url: string): string {
+  return url.replace(/\/+$/, "").replace(/\/v1$/, "");
+}
+
+function parseEndpoints(): LLMEndpoint[] {
+  const endpoints: LLMEndpoint[] = [];
+
+  // LLM_ENDPOINTS: JSON array format — [{name, endpoint, apiKey?, weight}]
+  const endpointsJson = process.env.LLM_ENDPOINTS;
+  if (endpointsJson) {
+    const parsed = JSON.parse(endpointsJson) as Array<{
+      name: string;
+      endpoint: string;
+      apiKey?: string;
+      weight: number;
+    }>;
+    for (const ep of parsed) {
+      endpoints.push({
+        name: ep.name,
+        endpoint: normalizeUrl(ep.endpoint),
+        apiKey: ep.apiKey,
+        weight: ep.weight,
+      });
+    }
+    return endpoints;
+  }
+
+  // Fallback: LLM_BASE_URL (single endpoint, backwards compatible)
+  const llmBaseUrl = process.env.LLM_BASE_URL;
+  if (llmBaseUrl) {
+    endpoints.push({
+      name: "default",
+      endpoint: normalizeUrl(llmBaseUrl),
+      apiKey: process.env.LLM_API_KEY || undefined,
+      weight: 100,
+    });
+    return endpoints;
+  }
+
+  throw new Error(
+    "Missing required env: LLM_ENDPOINTS (JSON array) or LLM_BASE_URL (single endpoint)"
+  );
+}
+
 let cachedConfig: OrchestratorConfig | null = null;
 
 export function loadConfig(): OrchestratorConfig {
-  const llmBaseUrl = process.env.LLM_BASE_URL;
-  if (!llmBaseUrl) {
-    throw new Error("Missing required env: LLM_BASE_URL");
-  }
-  // Normalize: strip trailing slash, strip /v1 suffix (llm-client appends /v1/chat/completions)
-  const llmEndpoint = llmBaseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
-
-  const llmApiKey = process.env.LLM_API_KEY || "";
+  const endpoints = parseEndpoints();
 
   const gitRepoUrl = process.env.GIT_REPO_URL;
   if (!gitRepoUrl) {
@@ -32,16 +69,15 @@ export function loadConfig(): OrchestratorConfig {
     );
   }
 
-  const config: OrchestratorConfig = {
+  cachedConfig = {
     maxWorkers: Number(process.env.MAX_WORKERS) || 4,
     workerTimeout: Number(process.env.WORKER_TIMEOUT) || 1800,
     mergeStrategy: mergeStrategy as "fast-forward" | "rebase" | "merge-commit",
     llm: {
-      endpoint: llmEndpoint,
+      endpoints,
       model: process.env.LLM_MODEL || "glm-5",
       maxTokens: Number(process.env.LLM_MAX_TOKENS) || 8192,
       temperature: Number(process.env.LLM_TEMPERATURE) || 0.7,
-      apiKey: llmApiKey,
     },
     git: {
       repoUrl: gitRepoUrl,
@@ -59,7 +95,7 @@ export function loadConfig(): OrchestratorConfig {
     healthCheckInterval: Number(process.env.HEALTH_CHECK_INTERVAL) || 10,
   };
 
-  return config;
+  return cachedConfig;
 }
 
 export function getConfig(): OrchestratorConfig {

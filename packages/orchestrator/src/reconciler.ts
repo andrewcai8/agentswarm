@@ -90,11 +90,10 @@ export class Reconciler {
     this.fixCounter = 0;
 
     this.llmClient = new LLMClient({
-      endpoint: config.llm.endpoint,
+      endpoints: config.llm.endpoints,
       model: config.llm.model,
       maxTokens: config.llm.maxTokens,
       temperature: config.llm.temperature,
-      apiKey: config.llm.apiKey,
     });
 
     this.sweepCompleteCallbacks = [];

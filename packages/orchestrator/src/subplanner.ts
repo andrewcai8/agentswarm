@@ -167,11 +167,10 @@ export class Subplanner {
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
 
     this.llmClient = new LLMClient({
-      endpoint: config.llm.endpoint,
+      endpoints: config.llm.endpoints,
       model: config.llm.model,
       maxTokens: config.llm.maxTokens,
       temperature: config.llm.temperature,
-      apiKey: config.llm.apiKey,
     });
 
     this.subtaskCreatedCallbacks = [];

@@ -1,4 +1,4 @@
-import { createLogger, type LLMEndpoint } from "@agentswarm/core";
+import { createLogger, type LLMEndpoint, type Span, writeLLMDetail } from "@agentswarm/core";
 
 const logger = createLogger("llm-client", "root-planner");
 
@@ -115,19 +115,44 @@ export class LLMClient {
 
   async complete(
     messages: LLMMessage[],
-    overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>
+    overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>,
+    parentSpan?: Span
   ): Promise<LLMResponse> {
     const orderedEndpoints = this.selectEndpoints();
     let lastError: Error | null = null;
 
-    for (const state of orderedEndpoints) {
+    logger.debug("LLM request starting", { endpointOrder: orderedEndpoints.map(e => e.config.name), model: overrides?.model ?? this.config.model, messageCount: messages.length });
+
+    const span = parentSpan?.child("llm.complete", { agentId: "llm-client" });
+    span?.setAttributes({
+      model: overrides?.model ?? this.config.model,
+      messageCount: messages.length,
+      endpointCount: orderedEndpoints.length,
+    });
+
+    for (let attemptIndex = 0; attemptIndex < orderedEndpoints.length; attemptIndex++) {
+      const state = orderedEndpoints[attemptIndex];
       try {
-        return await this.sendRequest(state, messages, overrides);
+        const result = await this.sendRequest(state, messages, overrides, span);
+
+        span?.setAttributes({
+          promptTokens: result.usage.promptTokens,
+          completionTokens: result.usage.completionTokens,
+          totalTokens: result.usage.totalTokens,
+          endpoint: result.endpoint,
+          latencyMs: result.latencyMs,
+          finishReason: result.finishReason,
+          retries: attemptIndex,
+        });
+        span?.setStatus("ok");
+        span?.end();
+
+        return result;
       } catch (err) {
         lastError = err instanceof Error ? err : new Error(String(err));
         this.recordFailure(state, lastError);
 
-        if (orderedEndpoints.indexOf(state) < orderedEndpoints.length - 1) {
+        if (attemptIndex < orderedEndpoints.length - 1) {
           logger.warn(`Endpoint ${state.config.name} failed, trying next`, {
             error: lastError.message,
             endpoint: state.config.name,
@@ -135,6 +160,9 @@ export class LLMClient {
         }
       }
     }
+
+    span?.setStatus("error", lastError?.message);
+    span?.end();
 
     throw new Error(
       `All ${this.config.endpoints.length} LLM endpoints failed. Last error: ${lastError?.message}`
@@ -154,6 +182,12 @@ export class LLMClient {
 
     const healthy = this.states.filter((s) => s.healthy);
     const unhealthy = this.states.filter((s) => !s.healthy);
+
+    logger.debug("Endpoint selection", {
+      healthy: healthy.map(s => s.config.name),
+      unhealthy: unhealthy.map(s => s.config.name),
+      order: [...this.weightedSort(healthy), ...unhealthy].map(s => ({ name: s.config.name, weight: Math.round(s.effectiveWeight * 10) / 10, latency: Math.round(s.avgLatencyMs) })),
+    });
 
     return [...this.weightedSort(healthy), ...unhealthy];
   }
@@ -189,50 +223,113 @@ export class LLMClient {
   private async sendRequest(
     state: EndpointState,
     messages: LLMMessage[],
-    overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>
+    overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>,
+    parentSpan?: Span
   ): Promise<LLMResponse> {
     const startMs = Date.now();
     state.totalRequests++;
     this.requestCounter++;
 
-    const url = `${state.config.endpoint}/v1/chat/completions`;
+    const model = overrides?.model ?? this.config.model;
+    const promptCharCount = messages.reduce((sum, m) => sum + m.content.length, 0);
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        ...(state.config.apiKey ? { Authorization: `Bearer ${state.config.apiKey}` } : {}),
-      },
-      body: JSON.stringify({
-        model: overrides?.model ?? this.config.model,
-        messages,
-        temperature: overrides?.temperature ?? this.config.temperature,
-        max_tokens: overrides?.maxTokens ?? this.config.maxTokens,
-      }),
-      signal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
+    const requestSpan = parentSpan?.child("llm.request", { agentId: "llm-client" });
+    requestSpan?.setAttributes({
+      endpoint: state.config.name,
+      model,
+      promptCharCount,
     });
 
-    if (!response.ok) {
-      const body = await response.text();
-      throw new Error(`LLM request failed (${response.status}) from ${state.config.name}: ${body}`);
-    }
+    const url = `${state.config.endpoint}/v1/chat/completions`;
 
-    const data = (await response.json()) as ChatCompletionResponse;
-    const latencyMs = Date.now() - startMs;
+    logger.debug("Sending LLM request", {
+      url,
+      endpoint: state.config.name,
+      model,
+      promptCharCount,
+      maxTokens: overrides?.maxTokens ?? this.config.maxTokens,
+      temperature: overrides?.temperature ?? this.config.temperature,
+    });
 
-    this.recordSuccess(state, latencyMs);
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          ...(state.config.apiKey ? { Authorization: `Bearer ${state.config.apiKey}` } : {}),
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          temperature: overrides?.temperature ?? this.config.temperature,
+          max_tokens: overrides?.maxTokens ?? this.config.maxTokens,
+        }),
+        signal: AbortSignal.timeout(this.config.timeoutMs ?? 120_000),
+      });
 
-    return {
-      content: data.choices[0].message.content,
-      usage: {
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`LLM request failed (${response.status}) from ${state.config.name}: ${body}`);
+      }
+
+      const data = (await response.json()) as ChatCompletionResponse;
+      const latencyMs = Date.now() - startMs;
+
+      this.recordSuccess(state, latencyMs);
+
+      logger.debug("LLM response received", {
+        endpoint: state.config.name,
+        latencyMs,
+        finishReason: data.choices[0].finish_reason,
+        contentLength: data.choices[0].message.content.length,
+        contentPreview: data.choices[0].message.content.slice(0, 200),
         promptTokens: data.usage?.prompt_tokens ?? 0,
         completionTokens: data.usage?.completion_tokens ?? 0,
-        totalTokens: data.usage?.total_tokens ?? 0,
-      },
-      finishReason: data.choices[0].finish_reason ?? "unknown",
-      endpoint: state.config.name,
-      latencyMs,
-    };
+      });
+
+      if (requestSpan) {
+        requestSpan.setAttributes({
+          promptTokens: data.usage?.prompt_tokens ?? 0,
+          completionTokens: data.usage?.completion_tokens ?? 0,
+          totalTokens: data.usage?.total_tokens ?? 0,
+          finishReason: data.choices[0].finish_reason ?? "unknown",
+          latencyMs,
+          endpoint: state.config.name,
+        });
+        requestSpan.setStatus("ok");
+        requestSpan.end();
+
+        writeLLMDetail(requestSpan.spanId, {
+          messages,
+          response: data.choices[0].message.content,
+        });
+      }
+
+      return {
+        content: data.choices[0].message.content,
+        usage: {
+          promptTokens: data.usage?.prompt_tokens ?? 0,
+          completionTokens: data.usage?.completion_tokens ?? 0,
+          totalTokens: data.usage?.total_tokens ?? 0,
+        },
+        finishReason: data.choices[0].finish_reason ?? "unknown",
+        endpoint: state.config.name,
+        latencyMs,
+      };
+    } catch (err) {
+      if (requestSpan) {
+        const errMsg = err instanceof Error ? err.message : String(err);
+        requestSpan.setStatus("error", errMsg);
+        requestSpan.end();
+
+        writeLLMDetail(requestSpan.spanId, {
+          messages,
+          error: errMsg,
+        });
+      }
+
+      throw err;
+    }
   }
 
   private recordSuccess(state: EndpointState, latencyMs: number): void {
@@ -276,6 +373,10 @@ export class LLMClient {
       const latencyScale = Math.max(0.5, 1.0 / latencyRatio);
       state.effectiveWeight = state.config.weight * latencyScale;
     }
+
+    logger.debug("Endpoint weights rebalanced", {
+      weights: healthyWithLatency.map(s => ({ name: s.config.name, baseWeight: s.config.weight, effectiveWeight: Math.round(s.effectiveWeight * 10) / 10, avgLatencyMs: Math.round(s.avgLatencyMs) })),
+    });
   }
 
   getEndpointStats(): Array<{

@@ -8,6 +8,9 @@ export interface OrchestratorConfig extends HarnessConfig {
   readinessTimeoutMs: number;
 }
 
+/** Named type for the LLM configuration block (extracted from HarnessConfig). */
+export type LLMConfig = OrchestratorConfig["llm"];
+
 const ALLOWED_MERGE_STRATEGIES = ["fast-forward", "rebase", "merge-commit"] as const;
 
 function normalizeUrl(url: string): string {
@@ -64,7 +67,7 @@ export function loadConfig(): OrchestratorConfig {
     throw new Error("Missing required env: GIT_REPO_URL");
   }
 
-  const mergeStrategy = process.env.MERGE_STRATEGY || "fast-forward";
+  const mergeStrategy = process.env.MERGE_STRATEGY || "rebase";
   if (!ALLOWED_MERGE_STRATEGIES.includes(mergeStrategy as typeof ALLOWED_MERGE_STRATEGIES[number])) {
     throw new Error(
       `Invalid mergeStrategy: ${mergeStrategy}. Must be one of: ${ALLOWED_MERGE_STRATEGIES.join(", ")}`

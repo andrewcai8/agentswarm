@@ -1194,6 +1194,20 @@ class KeyPoller:
 # Main
 # ---------------------------------------------------------------------------
 
+def print_json_loop(q: queue.Queue[Any]):
+    """Read from queue and print raw NDJSON to stdout."""
+    while True:
+        try:
+            item = q.get()
+            if item is None:
+                break
+            print(json.dumps(item), flush=True)
+        except KeyboardInterrupt:
+            break
+        except Exception:
+            break
+
+
 def main():
     ap = argparse.ArgumentParser(description="AgentSwarm Rich Terminal Dashboard")
     ap.add_argument("--demo", action="store_true", help="Synthetic data mode")
@@ -1202,12 +1216,32 @@ def main():
                      help="Replay an NDJSON log file at original speed")
     ap.add_argument("--speed", type=float, default=1.0,
                      help="Replay speed multiplier (default 1.0, e.g. 10 = 10x faster)")
+    ap.add_argument("--json-only", action="store_true", help="Output raw NDJSON to stdout (no TUI)")
     ap.add_argument("--agents", type=int, default=100, help="Max agent slots (default 100)")
     ap.add_argument("--features", type=int, default=200, help="Total features (default 200)")
     ap.add_argument("--hz", type=int, default=2, help="Refresh rate Hz (default 2)")
     ap.add_argument("--cost-rate", type=float, default=COST_PER_1K,
                      help="$/1K tokens for cost estimate")
     args = ap.parse_args()
+
+    # If JSON-only, we don't need rich console or dashboard state
+    if args.json_only:
+        dq: queue.Queue[Any] = queue.Queue()
+        if args.demo:
+            thr = threading.Thread(target=demo_generator,
+                                   args=(dq, args.agents, args.features), daemon=True)
+        elif args.stdin:
+            thr = threading.Thread(target=reader_stdin, args=(dq,), daemon=True)
+        else:
+            cwd = os.path.dirname(os.path.abspath(__file__))
+            thr = threading.Thread(
+                target=reader_subprocess,
+                args=(["node", "packages/orchestrator/dist/main.js"], dq, cwd),
+                daemon=True,
+            )
+        thr.start()
+        print_json_loop(dq)
+        return
 
     console = Console()
     state = DashboardState(args.agents, args.features, args.cost_rate)

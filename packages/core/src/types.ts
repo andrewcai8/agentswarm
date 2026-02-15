@@ -100,10 +100,14 @@ export interface MetricsSnapshot {
   timestamp: number;
   activeWorkers: number;
   pendingTasks: number;
+  runningTasks: number;
   completedTasks: number;
   failedTasks: number;
+  suspiciousTaskCount: number;
   commitsPerHour: number;
   mergeSuccessRate: number;
   totalTokensUsed: number;
   totalCostUsd: number;
+  activeToolCalls: number;
+  estimatedInFlightTokens: number;
 }

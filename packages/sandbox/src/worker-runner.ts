@@ -292,6 +292,20 @@ export async function runWorker(): Promise<void> {
     }
   }
 
+  let testExitCode: number | null = null;
+  if (!isEmptyResponse && existsSync(`${WORK_DIR}/package.json`)) {
+    log("Running post-agent test check (npm test --if-present)...");
+    try {
+      execSync("npm test --if-present", { cwd: WORK_DIR, encoding: "utf-8", timeout: 90_000 });
+      testExitCode = 0;
+      log("Post-agent test check: PASS");
+    } catch (testErr: unknown) {
+      const code = (testErr as { status?: number }).status;
+      testExitCode = code ?? 1;
+      log(`Post-agent test check: FAIL (exit code ${testExitCode})`);
+    }
+  }
+
   log("Extracting git diff stats...");
   const diff = safeExec(`git diff ${startSha} --no-color -- . ':!node_modules'`, WORK_DIR);
   const numstat = safeExec(`git diff ${startSha} --numstat`, WORK_DIR);
@@ -321,23 +335,37 @@ export async function runWorker(): Promise<void> {
 
   const filesModified = filesChanged.length - filesCreated.length;
 
+  const verificationConcerns: string[] = [];
+  if (buildExitCode !== null && buildExitCode !== 0) {
+    verificationConcerns.push(`Post-agent build check failed (tsc exit code ${buildExitCode})`);
+  }
+  if (testExitCode !== null && testExitCode !== 0) {
+    verificationConcerns.push(`Post-agent test check failed (npm test exit code ${testExitCode})`);
+  }
+
+  const verificationFailed = verificationConcerns.length > 0;
+  const taskFailed = isEmptyResponse || verificationFailed;
+
   const handoff: Handoff = {
     taskId: task.id,
-    status: isEmptyResponse ? "failed" : "complete",
+    status: taskFailed ? "failed" : "complete",
     summary: isEmptyResponse
       ? "Task failed: LLM returned empty response (0 tokens, 0 tool calls). Possible API/endpoint failure."
+      : verificationFailed
+        ? `Task failed verification: ${verificationConcerns.join("; ")}`
       : (lastAssistantMessage || "Task completed (no final message captured)."),
     diff,
     filesChanged,
     concerns: isEmptyResponse
       ? ["Empty LLM response — possible API failure or model endpoint issue"]
-      : (buildExitCode !== null && buildExitCode !== 0
-          ? [`Post-agent build check failed (tsc exit code ${buildExitCode})`]
-          : []),
+      : verificationConcerns,
     suggestions: isEmptyResponse
       ? ["Check LLM endpoint connectivity", "Verify model is available in sandbox environment"]
-      : [],
+      : (verificationFailed
+          ? ["Fix the reported verification failures before this branch is eligible for merge"]
+          : []),
     buildExitCode,
+    testExitCode,
     metrics: {
       linesAdded,
       linesRemoved,
@@ -355,9 +383,11 @@ export async function runWorker(): Promise<void> {
     filesChanged: filesChanged.length,
     linesAdded,
     linesRemoved,
+    buildExitCode: buildExitCode ?? -1,
+    testExitCode: testExitCode ?? -1,
     durationMs: handoff.metrics.durationMs,
   });
-  workerSpan?.setStatus("ok");
+  workerSpan?.setStatus(taskFailed ? "error" : "ok", taskFailed ? handoff.summary : undefined);
   workerSpan?.end();
   closeTracing();
 
@@ -393,6 +423,8 @@ runWorker().catch((err: unknown) => {
     filesChanged: [],
     concerns: [errorMessage],
     suggestions: ["Check worker logs for stack trace"],
+    buildExitCode: null,
+    testExitCode: null,
     metrics: {
       linesAdded: 0,
       linesRemoved: 0,

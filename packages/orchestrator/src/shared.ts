@@ -3,6 +3,7 @@ import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createLogger, getRecentCommits, getFileTree } from "@agentswarm/core";
+import type { Handoff } from "@agentswarm/core";
 import { spawn } from "node:child_process";
 import {
   AuthStorage,
@@ -39,6 +40,36 @@ export interface RawTaskInput {
 
 const MAX_FILE_TREE_ENTRIES = 300;
 const MAX_FEATURES_JSON_CHARS = 20_000;
+
+export interface MergeEligibilityResult {
+  eligible: boolean;
+  reasons: string[];
+}
+
+/**
+ * Shared merge gate: only handoffs that passed required verification checks
+ * are considered eligible to merge.
+ */
+export function evaluateHandoffMergeEligibility(handoff: Handoff): MergeEligibilityResult {
+  const reasons: string[] = [];
+
+  if (handoff.status !== "complete") {
+    reasons.push(`handoff status is "${handoff.status}"`);
+  }
+
+  if (handoff.buildExitCode !== undefined && handoff.buildExitCode !== null && handoff.buildExitCode !== 0) {
+    reasons.push(`build verification failed (tsc exit code ${handoff.buildExitCode})`);
+  }
+
+  if (handoff.testExitCode !== undefined && handoff.testExitCode !== null && handoff.testExitCode !== 0) {
+    reasons.push(`test verification failed (npm test exit code ${handoff.testExitCode})`);
+  }
+
+  return {
+    eligible: reasons.length === 0,
+    reasons,
+  };
+}
 
 export async function readRepoState(targetRepoPath: string): Promise<RepoState> {
   const cwd = targetRepoPath;

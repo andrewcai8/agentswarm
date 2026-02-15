@@ -19,3 +19,5 @@ gource.zip
 demo.gource
 .gource-*.log
 gource-bin
+
+agent-swarm-visualizer

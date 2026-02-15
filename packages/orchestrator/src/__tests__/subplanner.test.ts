@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Task, Handoff } from "@agentswarm/core";
 import { shouldDecompose, DEFAULT_SUBPLANNER_CONFIG, aggregateHandoffs, createFailureHandoff } from "../subplanner.js";
 import type { SubplannerConfig } from "../subplanner.js";
-import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";
+import { parseLLMTaskArray, slugifyForBranch, evaluateHandoffMergeEligibility } from "../shared.js";
 
 function makeTask(overrides?: Partial<Task>): Task {
   return {
@@ -278,6 +278,54 @@ describe("parseLLMTaskArray", () => {
   it("parses empty array", () => {
     const result = parseLLMTaskArray("[]");
     assert.strictEqual(result.length, 0);
+  });
+});
+
+describe("evaluateHandoffMergeEligibility", () => {
+  it("allows complete handoffs with passing verification checks", () => {
+    const handoff = makeHandoff({
+      status: "complete",
+      buildExitCode: 0,
+      testExitCode: 0,
+    });
+
+    const result = evaluateHandoffMergeEligibility(handoff);
+    assert.strictEqual(result.eligible, true);
+    assert.strictEqual(result.reasons.length, 0);
+  });
+
+  it("rejects non-complete status even if checks passed", () => {
+    const handoff = makeHandoff({
+      status: "failed",
+      buildExitCode: 0,
+      testExitCode: 0,
+    });
+
+    const result = evaluateHandoffMergeEligibility(handoff);
+    assert.strictEqual(result.eligible, false);
+    assert.ok(result.reasons.some((r) => r.includes("handoff status")));
+  });
+
+  it("rejects build verification failures", () => {
+    const handoff = makeHandoff({
+      status: "complete",
+      buildExitCode: 2,
+    });
+
+    const result = evaluateHandoffMergeEligibility(handoff);
+    assert.strictEqual(result.eligible, false);
+    assert.ok(result.reasons.some((r) => r.includes("tsc exit code 2")));
+  });
+
+  it("rejects test verification failures", () => {
+    const handoff = makeHandoff({
+      status: "complete",
+      testExitCode: 1,
+    });
+
+    const result = evaluateHandoffMergeEligibility(handoff);
+    assert.strictEqual(result.eligible, false);
+    assert.ok(result.reasons.some((r) => r.includes("npm test exit code 1")));
   });
 });
 

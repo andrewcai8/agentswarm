@@ -8,7 +8,14 @@ import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { Subplanner, shouldDecompose, DEFAULT_SUBPLANNER_CONFIG } from "./subplanner.js";
 import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
+import {
+  type RepoState,
+  readRepoState,
+  parsePlannerResponse,
+  ConcurrencyLimiter,
+  slugifyForBranch,
+  evaluateHandoffMergeEligibility,
+} from "./shared.js";
 import { ScopeTracker } from "./scope-tracker.js";
 import type { SweepResult } from "./reconciler.js";
 
@@ -596,6 +603,26 @@ export class Planner {
           this.monitor.recordSuspiciousTask(task.id, "0 tokens and 0 tool calls");
         }
 
+        const mergeEligibility = evaluateHandoffMergeEligibility(handoff);
+        if (handoff.status === "complete" && !mergeEligibility.eligible) {
+          const verificationFailureSummary = mergeEligibility.reasons.join("; ");
+          logger.warn("Verification gate blocked merge for completed handoff", {
+            taskId: task.id,
+            reasons: mergeEligibility.reasons,
+          });
+
+          handoff = {
+            ...handoff,
+            status: "failed",
+            summary: `Verification gate blocked merge: ${verificationFailureSummary}. ${handoff.summary}`,
+            concerns: [...new Set([...handoff.concerns, ...mergeEligibility.reasons])],
+            suggestions: [...new Set([
+              ...handoff.suggestions,
+              "Fix verification failures and rerun this task before merge",
+            ])],
+          };
+        }
+
         if (handoff.status === "complete") {
           this.taskQueue.completeTask(task.id);
         } else {
@@ -665,10 +692,20 @@ export class Planner {
       this.handoffsSinceLastPlan.push(handoff);
 
       if (handoff.status === "complete") {
-        if (task.conflictSourceBranch) {
-          this.mergeQueue.resetRetryCount(task.branch);
+        const mergeEligibility = evaluateHandoffMergeEligibility(handoff);
+        if (!mergeEligibility.eligible) {
+          logger.error("Invariant violation: complete handoff failed merge gate; skipping merge enqueue", {
+            taskId: task.id,
+            branch: task.branch,
+            reasons: mergeEligibility.reasons,
+          });
+          this.monitor.recordSuspiciousTask(task.id, `merge gate violation: ${mergeEligibility.reasons.join("; ")}`);
+        } else {
+          if (task.conflictSourceBranch) {
+            this.mergeQueue.resetRetryCount(task.branch);
+          }
+          this.mergeQueue.enqueue(task.branch, task.priority);
         }
-        this.mergeQueue.enqueue(task.branch, task.priority);
       } else if (
         (handoff.status === "failed" || handoff.status === "blocked") &&
         (task.retryCount ?? 0) < MAX_TASK_RETRIES

@@ -54,6 +54,8 @@ async function main(): Promise<void> {
           linesRemoved: handoff.metrics.linesRemoved,
           filesCreated: handoff.metrics.filesCreated,
           filesModified: handoff.metrics.filesModified,
+          buildExitCode: handoff.buildExitCode,
+          testExitCode: handoff.testExitCode,
           tokensUsed: handoff.metrics.tokensUsed,
           toolCallCount: handoff.metrics.toolCallCount,
           durationMs: handoff.metrics.durationMs,

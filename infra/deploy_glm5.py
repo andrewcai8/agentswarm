@@ -69,6 +69,10 @@ hf_cache_vol = modal.Volume.from_name("hf-cache-glm5", create_if_missing=True)
 dg_cache_path = "/root/.cache/deep_gemm"
 dg_cache_vol = modal.Volume.from_name("deepgemm-cache-glm5", create_if_missing=True)
 
+# Volume for FlashInfer JIT cache (persists compiled kernels — fused_moe_trtllm etc.)
+fi_cache_path = "/root/.cache/flashinfer"
+fi_cache_vol = modal.Volume.from_name("flashinfer-cache-glm5", create_if_missing=True)
+
 USE_DUMMY_WEIGHTS = os.environ.get("APP_USE_DUMMY_WEIGHTS", "0") == "1"
 
 image = image.env({
@@ -78,6 +82,10 @@ image = image.env({
     "SGLANG_JIT_DEEPGEMM_FAST_WARMUP": "1",
     "SGLANG_NSA_FORCE_MLA": "1",
     "SGLANG_LOCAL_IP_NIC": "overlay0",
+    # Pre-set FlashInfer cache dir so JIT kernels persist across restarts
+    "FLASHINFER_CACHE_DIR": "/root/.cache/flashinfer",
+    # Reduce CUDA memory fragmentation — reclaimed ~5GB reserved-but-unused per GPU
+    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
 })
 
 # Pass through any local SGLANG env vars for experimentation
@@ -122,6 +130,7 @@ def _start_server() -> subprocess.Popen:
         "--model-path", REPO_ID,
         "--served-model-name", SERVED_MODEL_NAME,
         "--tp", str(GPU_COUNT),
+        "--disable-custom-all-reduce",
         "--config", "/root/config.yaml",
     ]
 
@@ -169,7 +178,8 @@ app = modal.App("glm5-inference", image=image)
     gpu=GPU,
     scaledown_window=20 * MINUTES,
     timeout=30 * MINUTES,
-    volumes={hf_cache_path: hf_cache_vol, dg_cache_path: dg_cache_vol},
+    startup_timeout=45 * MINUTES,  # FlashInfer JIT compiles fused_moe kernels on first cold start
+    volumes={hf_cache_path: hf_cache_vol, dg_cache_path: dg_cache_vol, fi_cache_path: fi_cache_vol},
     region=REGION,
     min_containers=MIN_CONTAINERS,
 )

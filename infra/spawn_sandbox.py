@@ -64,7 +64,7 @@ def run_task(payload: dict) -> dict:
             timeout=2400,
             workdir="/workspace",
         )
-        print(f"[spawn] sandbox created for task {task_id}")
+        print(f"[spawn] sandbox created for task {task_id}", flush=True)
 
         f = sb.open("/workspace/task.json", "w")
         f.write(json.dumps(payload))
@@ -98,9 +98,9 @@ def run_task(payload: dict) -> dict:
         process = sb.exec("node", "/agent/worker-runner.js", timeout=1800)
 
         for line in process.stdout:
-            print(f"[worker:{task_id}] {line}", end="")
+            print(f"[worker:{task_id}] {line}", end="", flush=True)
         for line in process.stderr:
-            print(f"[worker:{task_id}] {line}", end="", file=sys.stderr)
+            print(f"[worker:{task_id}] {line}", end="", file=sys.stderr, flush=True)
 
         process.wait()
 
@@ -111,19 +111,19 @@ def run_task(payload: dict) -> dict:
                 timeout=120,
             )
             push_proc.wait()
-            print(f"[spawn] pushed branch {branch} to origin")
+            print(f"[spawn] pushed branch {branch} to origin", flush=True)
         else:
-            print(f"[spawn] WARNING: no GIT_TOKEN, skipping push for {branch}")
+            print(f"[spawn] WARNING: no GIT_TOKEN, skipping push for {branch}", flush=True)
 
         f = sb.open("/workspace/result.json", "r")
         result = json.loads(f.read())
         f.close()
 
-        print(f"[spawn] task {task_id} completed: {result.get('status', 'unknown')}")
+        print(f"[spawn] task {task_id} completed: {result.get('status', 'unknown')}", flush=True)
         return result
 
     except Exception as e:
-        print(f"[spawn] task {task_id} failed: {e}")
+        print(f"[spawn] task {task_id} failed: {e}", flush=True)
         return {
             "taskId": task_id,
             "status": "failed",
@@ -147,7 +147,7 @@ def run_task(payload: dict) -> dict:
         if sb is not None:
             try:
                 sb.terminate()
-                print(f"[spawn] sandbox terminated for task {task_id}")
+                print(f"[spawn] sandbox terminated for task {task_id}", flush=True)
             except Exception:
                 pass
 

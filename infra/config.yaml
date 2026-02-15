@@ -12,8 +12,8 @@ reasoning-parser: glm45
 trust-remote-code: true
 
 # Memory
-mem-fraction-static: 0.85
-chunked-prefill-size: 32768
+mem-fraction-static: 0.80
+chunked-prefill-size: 16384
 kv-cache-dtype: fp8_e4m3
 
 # Observability
@@ -21,8 +21,8 @@ enable-metrics: true
 collect-tokens-histogram: true
 
 # Batching
-max-running-requests: 32
-cuda-graph-max-bs: 32
+max-running-requests: 24
+cuda-graph-max-bs: 24
 
 # Speculative Decoding (EAGLE) — matches cookbook defaults
 speculative-algorithm: EAGLE

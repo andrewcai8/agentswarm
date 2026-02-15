@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import type { Task, Handoff } from "@agentswarm/core";
 import { shouldDecompose, DEFAULT_SUBPLANNER_CONFIG, aggregateHandoffs, createFailureHandoff } from "../subplanner.js";
 import type { SubplannerConfig } from "../subplanner.js";
-import { parseLLMTaskArray } from "../shared.js";
+import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";
 
 function makeTask(overrides?: Partial<Task>): Task {
   return {
@@ -337,8 +337,34 @@ describe("Task parent-child relationships", () => {
   it("subtask branch follows naming convention", () => {
     const branchPrefix = "worker/";
     const subtaskId = "task-042-sub-3";
-    const branch = `${branchPrefix}${subtaskId}`;
+    const description = "Implement greedy meshing for the voxel engine";
+    const branch = `${branchPrefix}${subtaskId}-${slugifyForBranch(description)}`;
 
-    assert.strictEqual(branch, "worker/task-042-sub-3");
+    assert.strictEqual(branch, "worker/task-042-sub-3-implement-greedy-meshing-for-the-voxel-engine");
+  });
+});
+
+describe("slugifyForBranch", () => {
+  it("lowercases and hyphenates", () => {
+    assert.strictEqual(slugifyForBranch("Implement JWT Auth"), "implement-jwt-auth");
+  });
+
+  it("strips non-alphanumeric characters", () => {
+    assert.strictEqual(slugifyForBranch("Fix bug in src/auth.ts (urgent!)"), "fix-bug-in-src-auth-ts-urgent");
+  });
+
+  it("collapses consecutive hyphens", () => {
+    assert.strictEqual(slugifyForBranch("hello   ---   world"), "hello-world");
+  });
+
+  it("truncates to max length without trailing hyphen", () => {
+    const long = "a]".repeat(100);
+    const result = slugifyForBranch(long);
+    assert.ok(result.length <= 50);
+    assert.ok(!result.endsWith("-"));
+  });
+
+  it("handles empty string", () => {
+    assert.strictEqual(slugifyForBranch(""), "");
   });
 });

@@ -1,12 +1,12 @@
-import type { Task, Handoff } from "@agentswarm/core";
+import type { Task, Handoff, Tracer, Span } from "@agentswarm/core";
 import { createLogger } from "@agentswarm/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
-import { LLMClient, type LLMMessage } from "./llm-client.js";
-import { type RepoState, type RawTaskInput, readRepoState, parseLLMTaskArray, ConcurrencyLimiter } from "./shared.js";
+import { createPlannerPiSession, cleanupPiSession } from "./shared.js";
+import { type RepoState, type RawTaskInput, readRepoState, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
 
 const logger = createLogger("subplanner", "subplanner");
 
@@ -131,13 +131,13 @@ export function shouldDecompose(task: Task, config: SubplannerConfig, currentDep
 export class Subplanner {
   private config: OrchestratorConfig;
   private subplannerConfig: SubplannerConfig;
-  private llmClient: LLMClient;
   private taskQueue: TaskQueue;
   private workerPool: WorkerPool;
   private mergeQueue: MergeQueue;
   private monitor: Monitor;
   private systemPrompt: string;
   private targetRepoPath: string;
+  private tracer: Tracer | null = null;
 
   private dispatchLimiter: ConcurrencyLimiter;
 
@@ -166,21 +166,17 @@ export class Subplanner {
 
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
 
-    this.llmClient = new LLMClient({
-      endpoints: config.llm.endpoints,
-      model: config.llm.model,
-      maxTokens: config.llm.maxTokens,
-      temperature: config.llm.temperature,
-      timeoutMs: config.llm.timeoutMs,
-    });
-
     this.subtaskCreatedCallbacks = [];
     this.subtaskCompletedCallbacks = [];
     this.decompositionCallbacks = [];
     this.errorCallbacks = [];
   }
 
-  async decomposeAndExecute(parentTask: Task, depth: number = 0): Promise<Handoff> {
+  setTracer(tracer: Tracer): void {
+    this.tracer = tracer;
+  }
+
+  async decomposeAndExecute(parentTask: Task, depth: number = 0, parentSpan?: Span): Promise<Handoff> {
     const taskLogger = logger.withTask(parentTask.id);
     taskLogger.info("Starting subplanner decomposition", {
       parentTaskId: parentTask.id,
@@ -188,13 +184,23 @@ export class Subplanner {
       scopeSize: parentTask.scope.length,
     });
 
+    const span = parentSpan
+      ? parentSpan.child("subplanner.decomposeAndExecute", { agentId: "subplanner" })
+      : this.tracer?.startSpan("subplanner.decomposeAndExecute", { agentId: "subplanner" });
+    span?.setAttributes({ parentTaskId: parentTask.id, depth, scopeSize: parentTask.scope.length });
+
     try {
+      logger.debug("Subplanner decompose starting", { parentTaskId: parentTask.id, depth, description: parentTask.description.slice(0, 200), scope: parentTask.scope, acceptance: parentTask.acceptance.slice(0, 200) });
       const repoState = await readRepoState(this.targetRepoPath);
-      const subtasks = await this.decompose(parentTask, repoState, depth);
+      const subtasks = await this.decompose(parentTask, repoState, depth, span);
 
       if (subtasks.length === 0) {
         taskLogger.info("LLM returned no subtasks — task is atomic, dispatching to worker directly");
-        return this.executeAsWorkerTask(parentTask);
+        const handoff = await this.executeAsWorkerTask(parentTask, span);
+        span?.setAttributes({ atomic: true });
+        span?.setStatus("ok");
+        span?.end();
+        return handoff;
       }
 
       for (const cb of this.decompositionCallbacks) {
@@ -206,7 +212,7 @@ export class Subplanner {
         depth,
       });
 
-      const handoffs = await this.executeSubtasks(subtasks, depth);
+      const handoffs = await this.executeSubtasks(subtasks, depth, span);
 
       for (const subtask of subtasks) {
         const taskObj = this.taskQueue.getById(subtask.id);
@@ -215,7 +221,11 @@ export class Subplanner {
         }
       }
 
-      return aggregateHandoffs(parentTask, subtasks, handoffs);
+      const aggregated = aggregateHandoffs(parentTask, subtasks, handoffs);
+      span?.setAttributes({ subtaskCount: subtasks.length, status: aggregated.status });
+      span?.setStatus(aggregated.status === "complete" ? "ok" : "error");
+      span?.end();
+      return aggregated;
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       taskLogger.error("Subplanner decomposition failed", { error: err.message, depth });
@@ -224,6 +234,8 @@ export class Subplanner {
         cb(err, parentTask.id);
       }
 
+      span?.setStatus("error", err.message);
+      span?.end();
       return createFailureHandoff(parentTask, err);
     }
   }
@@ -232,6 +244,7 @@ export class Subplanner {
     parentTask: Task,
     repoState: RepoState,
     depth: number,
+    parentSpan?: Span,
   ): Promise<Task[]> {
     let userMessage = `## Parent Task\n`;
     userMessage += `- **ID**: ${parentTask.id}\n`;
@@ -248,72 +261,92 @@ export class Subplanner {
       userMessage += `## FEATURES.json\n${repoState.featuresJson}\n\n`;
     }
 
-    const messages: LLMMessage[] = [
-      { role: "system", content: this.systemPrompt },
-      { role: "user", content: userMessage },
-    ];
-
-    logger.info("Calling LLM for task decomposition", {
+    logger.info("Creating ephemeral Pi session for task decomposition", {
       parentTaskId: parentTask.id,
       messageLength: userMessage.length,
       depth,
     });
 
-    const response = await this.llmClient.complete(messages);
-    this.monitor.recordTokenUsage(response.usage.totalTokens);
+    const piResult = await createPlannerPiSession({
+      systemPrompt: this.systemPrompt,
+      targetRepoPath: this.targetRepoPath,
+      llmConfig: this.config.llm,
+    });
 
-    const rawSubtasks = parseLLMTaskArray(response.content).filter((r) => r.description?.trim());
+    try {
+      await piResult.session.prompt(userMessage);
 
-    const subtasks: Task[] = [];
-    let subCounter = 0;
+      const stats = piResult.session.getSessionStats();
+      this.monitor.recordTokenUsage(stats.tokens.total);
 
-    for (const raw of rawSubtasks) {
-      subCounter++;
-      const id = raw.id || `${parentTask.id}-sub-${subCounter}`;
-      let validScope = raw.scope || [];
-
-      const invalidFiles = validScope.filter((f) => !parentTask.scope.includes(f));
-      if (invalidFiles.length > 0) {
-        logger.warn("Subtask scope contains files outside parent scope — removing them", {
+      const responseText = piResult.session.getLastAssistantText();
+      logger.debug("Subplanner LLM response", { parentTaskId: parentTask.id, responseLength: responseText?.length ?? 0, preview: responseText?.slice(0, 500) ?? "" });
+      if (!responseText) {
+        logger.warn("Pi session returned no text for decomposition", {
           parentTaskId: parentTask.id,
-          subtaskId: id,
-          invalidFiles,
         });
-        validScope = validScope.filter((f) => parentTask.scope.includes(f));
-        if (validScope.length === 0) {
-          logger.warn("Subtask has no valid scope files after filtering — skipping", { subtaskId: id });
-          continue;
-        }
+        return [];
       }
 
-      const subtask: Task = {
-        id,
-        parentId: parentTask.id,
-        description: raw.description,
-        scope: validScope,
-        acceptance: raw.acceptance || "",
-        branch: raw.branch || `${this.config.git.branchPrefix}${id}`,
-        status: "pending" as const,
-        createdAt: Date.now(),
-        priority: raw.priority || parentTask.priority,
-      };
+      const rawSubtasks = parseLLMTaskArray(responseText).filter((r) => r.description?.trim());
 
-      subtasks.push(subtask);
+      const subtasks: Task[] = [];
+      let subCounter = 0;
+
+      for (const raw of rawSubtasks) {
+        subCounter++;
+        const id = raw.id || `${parentTask.id}-sub-${subCounter}`;
+        let validScope = raw.scope || [];
+
+        const invalidFiles = validScope.filter((f) => !parentTask.scope.includes(f));
+        if (invalidFiles.length > 0) {
+          logger.warn("Subtask scope contains files outside parent scope — removing them", {
+            parentTaskId: parentTask.id,
+            subtaskId: id,
+            invalidFiles,
+          });
+          validScope = validScope.filter((f) => parentTask.scope.includes(f));
+          if (validScope.length === 0) {
+            logger.warn("Subtask has no valid scope files after filtering — skipping", { subtaskId: id });
+            continue;
+          }
+        }
+
+        const subtask: Task = {
+          id,
+          parentId: parentTask.id,
+          description: raw.description,
+          scope: validScope,
+          acceptance: raw.acceptance || "",
+          branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
+          status: "pending" as const,
+          createdAt: Date.now(),
+          priority: raw.priority || parentTask.priority,
+        };
+
+        subtasks.push(subtask);
+      }
+
+      for (const st of subtasks) {
+        logger.debug("Subtask created", { id: st.id, parentId: parentTask.id, description: st.description.slice(0, 200), scope: st.scope, priority: st.priority });
+      }
+
+      if (subtasks.length > this.subplannerConfig.maxSubtasks) {
+        logger.warn("Too many subtasks — truncating", {
+          parentTaskId: parentTask.id,
+          count: subtasks.length,
+          max: this.subplannerConfig.maxSubtasks,
+        });
+        return subtasks.slice(0, this.subplannerConfig.maxSubtasks);
+      }
+
+      return subtasks;
+    } finally {
+      cleanupPiSession(piResult.session, piResult.tempDir);
     }
-
-    if (subtasks.length > this.subplannerConfig.maxSubtasks) {
-      logger.warn("Too many subtasks — truncating", {
-        parentTaskId: parentTask.id,
-        count: subtasks.length,
-        max: this.subplannerConfig.maxSubtasks,
-      });
-      return subtasks.slice(0, this.subplannerConfig.maxSubtasks);
-    }
-
-    return subtasks;
   }
 
-  private async executeSubtasks(subtasks: Task[], currentDepth: number): Promise<Handoff[]> {
+  private async executeSubtasks(subtasks: Task[], currentDepth: number, parentSpan?: Span): Promise<Handoff[]> {
     for (const subtask of subtasks) {
       this.taskQueue.enqueue(subtask);
       for (const cb of this.subtaskCreatedCallbacks) {
@@ -324,6 +357,7 @@ export class Subplanner {
     const handoffPromises: Promise<{ subtask: Task; handoff: Handoff }>[] = [];
 
     for (const subtask of subtasks) {
+      logger.debug("Subtask dispatch decision", { subtaskId: subtask.id, scopeSize: subtask.scope.length, willDecompose: shouldDecompose(subtask, this.subplannerConfig, currentDepth + 1), currentDepth, maxDepth: this.subplannerConfig.maxDepth, scopeThreshold: this.subplannerConfig.scopeThreshold });
       const promise = (async () => {
         if (shouldDecompose(subtask, this.subplannerConfig, currentDepth + 1)) {
           logger.info("Subtask still complex — recursing", {
@@ -335,7 +369,7 @@ export class Subplanner {
           this.taskQueue.assignTask(subtask.id, "subplanner");
           this.taskQueue.startTask(subtask.id);
 
-          const handoff = await this.decomposeAndExecute(subtask, currentDepth + 1);
+          const handoff = await this.decomposeAndExecute(subtask, currentDepth + 1, parentSpan);
 
           if (handoff.status === "complete") {
             this.taskQueue.completeTask(subtask.id);
@@ -346,7 +380,7 @@ export class Subplanner {
           return { subtask, handoff };
         }
 
-        return this.dispatchToWorker(subtask);
+        return this.dispatchToWorker(subtask, parentSpan);
       })();
 
       handoffPromises.push(promise);
@@ -375,8 +409,9 @@ export class Subplanner {
     return handoffs;
   }
 
-  private async dispatchToWorker(subtask: Task): Promise<{ subtask: Task; handoff: Handoff }> {
+  private async dispatchToWorker(subtask: Task, parentSpan?: Span): Promise<{ subtask: Task; handoff: Handoff }> {
     await this.dispatchLimiter.acquire();
+    logger.debug("Subtask worker dispatch", { subtaskId: subtask.id, limiterActive: this.dispatchLimiter.getActive(), limiterQueued: this.dispatchLimiter.getQueueLength() });
 
     // No local branch creation — branches are created inside sandboxes
     // and pushed to remote. Merge queue fetches from origin.
@@ -385,7 +420,7 @@ export class Subplanner {
     this.taskQueue.startTask(subtask.id);
 
     try {
-      const handoff = await this.workerPool.assignTask(subtask);
+      const handoff = await this.workerPool.assignTask(subtask, parentSpan);
 
       if (handoff.filesChanged.length === 0) {
         this.monitor.recordEmptyDiff(subtask.assignedTo || "unknown", subtask.id);
@@ -419,9 +454,32 @@ export class Subplanner {
     }
   }
 
-  private async executeAsWorkerTask(task: Task): Promise<Handoff> {
-    const result = await this.dispatchToWorker(task);
-    return result.handoff;
+  private async executeAsWorkerTask(task: Task, parentSpan?: Span): Promise<Handoff> {
+    // Task is already in 'running' state (set by planner), so we skip
+    // assignTask/startTask and dispatch directly to the worker.
+    // The planner handles the final complete/fail transition.
+    await this.dispatchLimiter.acquire();
+
+    try {
+      const handoff = await this.workerPool.assignTask(task, parentSpan);
+
+      if (handoff.filesChanged.length === 0) {
+        this.monitor.recordEmptyDiff(task.assignedTo || "unknown", task.id);
+      }
+
+      this.monitor.recordTokenUsage(handoff.metrics.tokensUsed);
+
+      return handoff;
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error("Worker dispatch failed for atomic task", {
+        taskId: task.id,
+        error: err.message,
+      });
+      throw err;
+    } finally {
+      this.dispatchLimiter.release();
+    }
   }
 
   onSubtaskCreated(callback: (subtask: Task, parentId: string) => void): void {

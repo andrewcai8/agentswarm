@@ -5,13 +5,13 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Task } from "@agentswarm/core";
+import type { Task, Tracer, Span } from "@agentswarm/core";
 import { createLogger } from "@agentswarm/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { Monitor } from "./monitor.js";
 import { LLMClient, type LLMMessage } from "./llm-client.js";
-import { parseLLMTaskArray } from "./shared.js";
+import { parseLLMTaskArray, slugifyForBranch } from "./shared.js";
 
 const execFileAsync = promisify(execFile);
 const logger = createLogger("reconciler", "reconciler");
@@ -64,6 +64,7 @@ export class Reconciler {
   private systemPrompt: string;
   private targetRepoPath: string;
 
+  private tracer: Tracer | null = null;
   private timer: ReturnType<typeof setInterval> | null;
   private running: boolean;
   private fixCounter: number;
@@ -99,6 +100,10 @@ export class Reconciler {
 
     this.sweepCompleteCallbacks = [];
     this.errorCallbacks = [];
+  }
+
+  setTracer(tracer: Tracer): void {
+    this.tracer = tracer;
   }
 
   /**
@@ -150,14 +155,27 @@ export class Reconciler {
    */
   async sweep(): Promise<Task[]> {
     logger.info("Starting reconciler sweep");
+    const sweepSpan = this.tracer?.startSpan("reconciler.sweep", { agentId: "reconciler" });
 
+    const buildSpan = sweepSpan?.child("reconciler.build");
+    logger.debug("Running tsc --noEmit", { targetRepo: this.targetRepoPath });
     const tscResult = await runCommand("npx", ["tsc", "--noEmit"], this.targetRepoPath);
     const buildOutput = tscResult.stdout + tscResult.stderr;
-    const buildOk = tscResult.code === 0 && !tscResult.stderr?.includes("error TS");
+    const buildNotConfigured = /no inputs were found|could not find a valid tsconfig/i.test(buildOutput);
+    const buildOk = buildNotConfigured || (tscResult.code === 0 && !tscResult.stderr?.includes("error TS"));
+    logger.debug("tsc result", { exitCode: tscResult.code, ok: buildOk, buildNotConfigured, stdoutSize: tscResult.stdout.length, stderrSize: tscResult.stderr.length, outputPreview: buildOutput.slice(0, 500) });
+    buildSpan?.setAttributes({ exitCode: tscResult.code ?? -1, ok: buildOk, buildNotConfigured });
+    buildSpan?.end();
 
+    const testSpan = sweepSpan?.child("reconciler.test");
+    logger.debug("Running npm test", { targetRepo: this.targetRepoPath });
     const testResult = await runCommand("npm", ["test"], this.targetRepoPath);
     const testOutput = testResult.stdout + testResult.stderr;
-    const testsOk = testResult.code === 0 && !testResult.stderr?.includes("FAIL");
+    const testNotConfigured = /Missing script|no test specified/i.test(testOutput);
+    const testsOk = testNotConfigured || (testResult.code === 0 && !testResult.stderr?.includes("FAIL"));
+    logger.debug("npm test result", { exitCode: testResult.code, ok: testsOk, testNotConfigured, stdoutSize: testResult.stdout.length, stderrSize: testResult.stderr.length, outputPreview: testOutput.slice(0, 500) });
+    testSpan?.setAttributes({ exitCode: testResult.code ?? -1, ok: testsOk, testNotConfigured });
+    testSpan?.end();
 
     const conflictResult = await runCommand(
       "grep", ["-rl", "<<<<<<<", "--include=*.ts", "--include=*.tsx", "--include=*.js", "--include=*.json", "."],
@@ -170,6 +188,9 @@ export class Reconciler {
 
     if (buildOk && testsOk && !hasConflictMarkers) {
       logger.info("All green — no fix tasks needed");
+      sweepSpan?.setAttributes({ buildOk, testsOk, hasConflictMarkers, fixTasksCreated: 0 });
+      sweepSpan?.setStatus("ok");
+      sweepSpan?.end();
       return [];
     }
 
@@ -202,11 +223,29 @@ export class Reconciler {
     ];
 
     logger.info("Calling LLM for fix task generation", { messageLength: userMessage.length });
+    logger.debug("Reconciler LLM prompt", { systemPromptSize: this.systemPrompt.length, userMessagePreview: userMessage.slice(0, 500) });
 
-    const response = await this.llmClient.complete(messages);
-    this.monitor.recordTokenUsage(response.usage.totalTokens);
+    let rawTasks: ReturnType<typeof parseLLMTaskArray>;
 
-    const rawTasks = parseLLMTaskArray(response.content);
+    try {
+      const response = await this.llmClient.complete(messages, undefined, sweepSpan);
+      this.monitor.recordTokenUsage(response.usage.totalTokens);
+      logger.debug("Reconciler LLM response", { contentLength: response.content.length, preview: response.content.slice(0, 500), tokens: response.usage.totalTokens, endpoint: response.endpoint, latencyMs: response.latencyMs });
+      rawTasks = parseLLMTaskArray(response.content);
+    } catch (llmError) {
+      const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
+      logger.warn("LLM unreachable for reconciler — skipping fix task generation (will retry next sweep)", {
+        error: errMsg,
+        buildOk,
+        testsOk,
+        hasConflictMarkers,
+      });
+      sweepSpan?.setAttributes({ buildOk, testsOk, hasConflictMarkers, llmFailed: true, fixTasksCreated: 0 });
+      sweepSpan?.setStatus("error", `LLM unreachable: ${errMsg}`);
+      sweepSpan?.end();
+      return [];
+    }
+
     const capped = rawTasks.slice(0, this.reconcilerConfig.maxFixTasks);
 
     const tasks: Task[] = capped.map((raw) => {
@@ -217,20 +256,25 @@ export class Reconciler {
         description: raw.description,
         scope: raw.scope || [],
         acceptance: raw.acceptance || "tsc --noEmit returns 0 and npm test returns 0",
-        branch: raw.branch || `${this.config.git.branchPrefix}${id}`,
+        branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
         status: "pending" as const,
         createdAt: Date.now(),
         priority: 1,
       };
     });
 
-    for (const task of tasks) {
-      this.taskQueue.enqueue(task);
-    }
-
     logger.info(`Created ${tasks.length} fix tasks`, {
       taskIds: tasks.map((t) => t.id),
     });
+
+    sweepSpan?.setAttributes({
+      buildOk,
+      testsOk,
+      hasConflictMarkers,
+      fixTasksCreated: tasks.length,
+    });
+    sweepSpan?.setStatus(buildOk && testsOk && !hasConflictMarkers ? "ok" : "error");
+    sweepSpan?.end();
 
     return tasks;
   }

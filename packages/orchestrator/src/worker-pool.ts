@@ -14,7 +14,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Task, Handoff, HarnessConfig } from "@agentswarm/core";
+import type { Task, Handoff, HarnessConfig, Tracer, Span } from "@agentswarm/core";
 import { createLogger } from "@agentswarm/core";
 
 const logger = createLogger("worker-pool", "root-planner");
@@ -36,8 +36,10 @@ export class WorkerPool {
     pythonPath: string;
     gitToken?: string;
   };
+  private tracer: Tracer | null = null;
   private taskCompleteCallbacks: ((handoff: Handoff) => void)[];
   private workerFailedCallbacks: ((taskId: string, error: Error) => void)[];
+  private activeToolCalls: Map<string, number>;
 
   constructor(
     config: {
@@ -55,6 +57,11 @@ export class WorkerPool {
     this.config = config;
     this.taskCompleteCallbacks = [];
     this.workerFailedCallbacks = [];
+    this.activeToolCalls = new Map();
+  }
+
+  setTracer(tracer: Tracer): void {
+    this.tracer = tracer;
   }
 
   /**
@@ -71,7 +78,7 @@ export class WorkerPool {
     logger.info("Worker pool stopped", { activeCount: this.activeWorkers.size });
   }
 
-  async assignTask(task: Task): Promise<Handoff> {
+  async assignTask(task: Task, parentSpan?: Span): Promise<Handoff> {
     const worker: Worker = {
       id: `ephemeral-${task.id}`,
       currentTask: task,
@@ -80,6 +87,11 @@ export class WorkerPool {
     this.activeWorkers.set(worker.id, worker);
 
     logger.info("Dispatching task to ephemeral sandbox", { taskId: task.id });
+
+    const workerSpan = parentSpan?.child("worker.execute", { taskId: task.id, agentId: "worker-pool" })
+      ?? this.tracer?.startSpan("worker.execute", { taskId: task.id, agentId: "worker-pool" });
+
+    const traceCtx = workerSpan && this.tracer ? this.tracer.propagationContext(workerSpan) : undefined;
 
     const endpoint = this.config.llm.endpoints[0];
     const baseUrl = endpoint.endpoint.replace(/\/+$/, "");
@@ -97,14 +109,27 @@ export class WorkerPool {
         temperature: this.config.llm.temperature,
         apiKey: endpoint.apiKey,
       },
+      trace: traceCtx,
     });
 
+    logger.debug("Sandbox payload prepared", { taskId: task.id, endpointName: endpoint.name, model: this.config.llm.model, payloadSize: payload.length, hasTraceCtx: !!traceCtx });
+
     try {
-      const handoff = await this.runSandboxStreaming(task.id, payload);
+      const handoff = await this.runSandboxStreaming(task.id, payload, workerSpan);
 
       for (const cb of this.taskCompleteCallbacks) {
         cb(handoff);
       }
+
+      workerSpan?.setAttributes({
+        status: handoff.status,
+        filesChanged: handoff.filesChanged.length,
+        tokensUsed: handoff.metrics.tokensUsed,
+        toolCallCount: handoff.metrics.toolCallCount,
+        durationMs: handoff.metrics.durationMs,
+      });
+      workerSpan?.setStatus("ok");
+      workerSpan?.end();
 
       logger.info("Task completed", { taskId: task.id, status: handoff.status });
 
@@ -113,6 +138,9 @@ export class WorkerPool {
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error("Ephemeral sandbox failed", { taskId: task.id, error: err.message });
 
+      workerSpan?.setStatus("error", err.message);
+      workerSpan?.end();
+
       for (const cb of this.workerFailedCallbacks) {
         cb(task.id, err);
       }
@@ -120,10 +148,11 @@ export class WorkerPool {
       throw err;
     } finally {
       this.activeWorkers.delete(worker.id);
+      this.activeToolCalls.delete(task.id);
     }
   }
 
-  private runSandboxStreaming(taskId: string, payload: string): Promise<Handoff> {
+  private runSandboxStreaming(taskId: string, payload: string, workerSpan?: Span): Promise<Handoff> {
     return new Promise<Handoff>((resolve, reject) => {
       const proc = spawn(
         this.config.pythonPath,
@@ -134,6 +163,8 @@ export class WorkerPool {
           stdio: ["ignore", "pipe", "pipe"],
         },
       );
+
+      logger.debug("Sandbox process spawned", { taskId, pythonPath: this.config.pythonPath, timeoutSec: this.config.workerTimeout });
 
       const stdoutLines: string[] = [];
       const stderrChunks: string[] = [];
@@ -159,6 +190,19 @@ export class WorkerPool {
       rl.on("line", (line: string) => {
         stdoutLines.push(line);
         this.forwardWorkerLine(taskId, line);
+
+        if (workerSpan) {
+          const lower = line.toLowerCase();
+          if (lower.includes("sandbox created")) {
+            workerSpan.event("sandbox.created");
+          } else if (lower.includes("repo cloned")) {
+            workerSpan.event("sandbox.cloned");
+          } else if (lower.includes("starting worker agent")) {
+            workerSpan.event("sandbox.workerStarted");
+          } else if (lower.includes("pushed branch")) {
+            workerSpan.event("sandbox.pushed");
+          }
+        }
       });
 
       proc.stderr!.on("data", (chunk: Buffer) => {
@@ -171,11 +215,22 @@ export class WorkerPool {
         settled = true;
 
         const stderr = stderrChunks.join("");
+
+        logger.debug("Sandbox process exited", { taskId, exitCode: _code, stdoutLines: stdoutLines.length, stderrSize: stderr.length });
+
         if (stderr) {
-          logger.warn("Sandbox stderr output", {
-            taskId,
-            stderr: stderr.slice(0, 500),
-          });
+          const hasErrors = /error|exception|traceback|fatal|panic/i.test(stderr);
+          if (hasErrors) {
+            logger.warn("Sandbox stderr contains errors", {
+              taskId,
+              stderr: stderr.slice(0, 800),
+            });
+          } else {
+            logger.debug("Sandbox stderr output", {
+              taskId,
+              stderr: stderr.slice(0, 500),
+            });
+          }
         }
 
         if (stdoutLines.length === 0) {
@@ -205,7 +260,10 @@ export class WorkerPool {
   }
 
   private forwardWorkerLine(taskId: string, line: string): void {
-    if (line.startsWith("{")) return;
+    if (line.startsWith("{")) {
+      logger.debug("Worker JSON output", { taskId, line: line.slice(0, 300) });
+      return;
+    }
 
     const spawnMatch = line.match(/^\[spawn\]\s*(.+)/);
     if (spawnMatch) {
@@ -219,11 +277,17 @@ export class WorkerPool {
 
     const workerMatch = line.match(/^\[worker:[^\]]*\]\s*(.+)/);
     if (workerMatch) {
+      const detail = workerMatch[1];
       logger.info("Worker progress", {
         taskId,
         phase: "execution",
-        detail: workerMatch[1],
+        detail,
       });
+
+      const toolCallMatch = detail.match(/Tool calls:\s*(\d+)/);
+      if (toolCallMatch) {
+        this.activeToolCalls.set(taskId, parseInt(toolCallMatch[1], 10));
+      }
       return;
     }
 
@@ -248,6 +312,14 @@ export class WorkerPool {
 
   getActiveTaskCount(): number {
     return this.activeWorkers.size;
+  }
+
+  getTotalActiveToolCalls(): number {
+    let total = 0;
+    for (const count of this.activeToolCalls.values()) {
+      total += count;
+    }
+    return total;
   }
 
   onTaskComplete(callback: (handoff: Handoff) => void): void {

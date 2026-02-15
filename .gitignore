@@ -13,3 +13,4 @@ __pycache__
 target-repo/
 state/
 .pi
+logs/

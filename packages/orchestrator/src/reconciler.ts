@@ -9,6 +9,7 @@ import type { Task, Tracer, Span } from "@agentswarm/core";
 import { createLogger } from "@agentswarm/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
+import type { MergeQueue, MergeStats } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { LLMClient, type LLMMessage } from "./llm-client.js";
 import { parseLLMTaskArray, slugifyForBranch } from "./shared.js";
@@ -32,6 +33,16 @@ interface ExecResult {
   stdout: string;
   stderr: string;
   code: number | null;
+}
+
+export interface SweepResult {
+  buildOk: boolean;
+  testsOk: boolean;
+  hasConflictMarkers: boolean;
+  buildOutput: string;
+  testOutput: string;
+  conflictFiles: string[];
+  fixTasks: Task[];
 }
 
 /**
@@ -60,6 +71,7 @@ export class Reconciler {
   private reconcilerConfig: ReconcilerConfig;
   private llmClient: LLMClient;
   private taskQueue: TaskQueue;
+  private mergeQueue: MergeQueue;
   private monitor: Monitor;
   private systemPrompt: string;
   private targetRepoPath: string;
@@ -69,19 +81,28 @@ export class Reconciler {
   private running: boolean;
   private fixCounter: number;
 
-  private sweepCompleteCallbacks: ((tasks: Task[]) => void)[];
+  private consecutiveGreenSweeps: number;
+  private readonly minIntervalMs: number;
+  private readonly maxIntervalMs: number;
+  private currentIntervalMs: number;
+
+  private sweepCompleteCallbacks: ((result: SweepResult) => void)[];
   private errorCallbacks: ((error: Error) => void)[];
+
+  private recentFixScopes: Set<string> = new Set();
 
   constructor(
     config: OrchestratorConfig,
     reconcilerConfig: ReconcilerConfig,
     taskQueue: TaskQueue,
+    mergeQueue: MergeQueue,
     monitor: Monitor,
     systemPrompt: string,
   ) {
     this.config = config;
     this.reconcilerConfig = reconcilerConfig;
     this.taskQueue = taskQueue;
+    this.mergeQueue = mergeQueue;
     this.monitor = monitor;
     this.systemPrompt = systemPrompt;
     this.targetRepoPath = config.targetRepoPath;
@@ -89,6 +110,11 @@ export class Reconciler {
     this.timer = null;
     this.running = false;
     this.fixCounter = 0;
+
+    this.consecutiveGreenSweeps = 0;
+    this.minIntervalMs = Math.min(60_000, reconcilerConfig.intervalMs);
+    this.maxIntervalMs = reconcilerConfig.intervalMs;
+    this.currentIntervalMs = reconcilerConfig.intervalMs;
 
     this.llmClient = new LLMClient({
       endpoints: config.llm.endpoints,
@@ -115,9 +141,9 @@ export class Reconciler {
 
     this.timer = setInterval(async () => {
       try {
-        const tasks = await this.sweep();
+        const result = await this.sweep();
         for (const cb of this.sweepCompleteCallbacks) {
-          cb(tasks);
+          cb(result);
         }
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
@@ -153,9 +179,11 @@ export class Reconciler {
   /**
    * Run a single sweep: check build + tests, create fix tasks if needed.
    */
-  async sweep(): Promise<Task[]> {
+  async sweep(): Promise<SweepResult> {
     logger.info("Starting reconciler sweep");
     const sweepSpan = this.tracer?.startSpan("reconciler.sweep", { agentId: "reconciler" });
+
+    const mergeCountBefore = this.mergeQueue.getMergeStats().totalMerged;
 
     const buildSpan = sweepSpan?.child("reconciler.build");
     logger.debug("Running tsc --noEmit", { targetRepo: this.targetRepoPath });
@@ -166,6 +194,16 @@ export class Reconciler {
     logger.debug("tsc result", { exitCode: tscResult.code, ok: buildOk, buildNotConfigured, stdoutSize: tscResult.stdout.length, stderrSize: tscResult.stderr.length, outputPreview: buildOutput.slice(0, 500) });
     buildSpan?.setAttributes({ exitCode: tscResult.code ?? -1, ok: buildOk, buildNotConfigured });
     buildSpan?.end();
+
+    const buildRunSpan = sweepSpan?.child("reconciler.buildRun");
+    logger.debug("Running npm run build", { targetRepo: this.targetRepoPath });
+    const buildRunResult = await runCommand("npm", ["run", "build", "--if-present"], this.targetRepoPath);
+    const buildRunOutput = buildRunResult.stdout + buildRunResult.stderr;
+    const buildRunNotConfigured = /Missing script|npm error|ERR!/i.test(buildRunOutput) && buildRunResult.code !== 0 && !buildRunOutput.includes("error TS");
+    const buildRunOk = buildRunNotConfigured || buildRunResult.code === 0;
+    logger.debug("npm run build result", { exitCode: buildRunResult.code, ok: buildRunOk, buildRunNotConfigured });
+    buildRunSpan?.setAttributes({ exitCode: buildRunResult.code ?? -1, ok: buildRunOk, buildRunNotConfigured });
+    buildRunSpan?.end();
 
     const testSpan = sweepSpan?.child("reconciler.test");
     logger.debug("Running npm test", { targetRepo: this.targetRepoPath });
@@ -184,14 +222,49 @@ export class Reconciler {
     const conflictFiles = conflictResult.stdout.trim().split("\n").filter(Boolean);
     const hasConflictMarkers = conflictFiles.length > 0;
 
-    logger.info("Sweep check results", { buildOk, testsOk, hasConflictMarkers, conflictFileCount: conflictFiles.length });
+    logger.info("Sweep check results", { buildOk, buildRunOk, testsOk, hasConflictMarkers, conflictFileCount: conflictFiles.length });
 
-    if (buildOk && testsOk && !hasConflictMarkers) {
+    if (buildOk && buildRunOk && testsOk && !hasConflictMarkers) {
       logger.info("All green — no fix tasks needed");
-      sweepSpan?.setAttributes({ buildOk, testsOk, hasConflictMarkers, fixTasksCreated: 0 });
+      sweepSpan?.setAttributes({ buildOk, buildRunOk, testsOk, hasConflictMarkers, fixTasksCreated: 0 });
       sweepSpan?.setStatus("ok");
       sweepSpan?.end();
-      return [];
+
+      this.consecutiveGreenSweeps++;
+      this.recentFixScopes.clear();
+      if (this.consecutiveGreenSweeps >= 3) {
+        this.adjustInterval(this.maxIntervalMs);
+      }
+
+      return {
+        buildOk: true,
+        testsOk: true,
+        hasConflictMarkers: false,
+        buildOutput: "",
+        testOutput: "",
+        conflictFiles: [],
+        fixTasks: [],
+      };
+    }
+
+    const mergeCountAfter = this.mergeQueue.getMergeStats().totalMerged;
+    if (mergeCountAfter > mergeCountBefore) {
+      logger.info("Merges occurred during sweep — discarding stale results", {
+        mergesBefore: mergeCountBefore,
+        mergesAfter: mergeCountAfter,
+      });
+      sweepSpan?.setAttributes({ buildOk, buildRunOk, testsOk, hasConflictMarkers, staleSkip: true, fixTasksCreated: 0 });
+      sweepSpan?.setStatus("ok", "stale skip");
+      sweepSpan?.end();
+      return {
+        buildOk,
+        testsOk,
+        hasConflictMarkers,
+        buildOutput: "",
+        testOutput: "",
+        conflictFiles: [],
+        fixTasks: [],
+      };
     }
 
     const gitResult = await runCommand("git", ["log", "--oneline", "-10"], this.targetRepoPath);
@@ -211,11 +284,19 @@ export class Reconciler {
       userMessage += `## Build Output (tsc --noEmit)\n\`\`\`\n${buildOutput.slice(0, 8000)}\n\`\`\`\n\n`;
     }
 
+    if (!buildRunOk) {
+      userMessage += `## Build Output (npm run build)\n\`\`\`\n${buildRunOutput.slice(0, 8000)}\n\`\`\`\n\n`;
+    }
+
     if (!testsOk) {
       userMessage += `## Test Output (npm test)\n\`\`\`\n${testOutput.slice(0, 8000)}\n\`\`\`\n\n`;
     }
 
-    userMessage += `## Recent Commits\n${recentCommits}\n`;
+    userMessage += `## Recent Commits\n${recentCommits}\n\n`;
+
+    if (this.recentFixScopes.size > 0) {
+      userMessage += `## Pending Fix Scopes\nFix tasks already target these files — do NOT create duplicates: ${[...this.recentFixScopes].join(", ")}\n\n`;
+    }
 
     const messages: LLMMessage[] = [
       { role: "system", content: this.systemPrompt },
@@ -240,49 +321,87 @@ export class Reconciler {
         testsOk,
         hasConflictMarkers,
       });
-      sweepSpan?.setAttributes({ buildOk, testsOk, hasConflictMarkers, llmFailed: true, fixTasksCreated: 0 });
+      sweepSpan?.setAttributes({         buildOk,
+        buildRunOk,
+        testsOk,
+        hasConflictMarkers,
+        llmFailed: true, fixTasksCreated: 0 });
       sweepSpan?.setStatus("error", `LLM unreachable: ${errMsg}`);
       sweepSpan?.end();
-      return [];
+      return {
+        buildOk,
+        testsOk,
+        hasConflictMarkers,
+        buildOutput: buildOk ? "" : buildOutput.slice(0, 8000),
+        testOutput: testsOk ? "" : testOutput.slice(0, 8000),
+        conflictFiles,
+        fixTasks: [],
+      };
     }
 
     const capped = rawTasks.slice(0, this.reconcilerConfig.maxFixTasks);
 
-    const tasks: Task[] = capped.map((raw) => {
+    const tasks: Task[] = [];
+    for (const raw of capped) {
+      const scope = raw.scope || [];
+      const allScopesCovered = scope.length > 0 && scope.every(f => this.recentFixScopes.has(f));
+      if (allScopesCovered) {
+        logger.debug("Skipping duplicate fix task (scope already covered)", { scope });
+        continue;
+      }
+
       this.fixCounter++;
       const id = raw.id || `fix-${String(this.fixCounter).padStart(3, "0")}`;
-      return {
+      tasks.push({
         id,
         description: raw.description,
-        scope: raw.scope || [],
+        scope,
         acceptance: raw.acceptance || "tsc --noEmit returns 0 and npm test returns 0",
         branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
         status: "pending" as const,
         createdAt: Date.now(),
         priority: 1,
-      };
-    });
+      });
+
+      for (const f of scope) {
+        this.recentFixScopes.add(f);
+      }
+    }
 
     logger.info(`Created ${tasks.length} fix tasks`, {
       taskIds: tasks.map((t) => t.id),
+      recentFixScopes: this.recentFixScopes.size,
     });
 
     sweepSpan?.setAttributes({
       buildOk,
+      buildRunOk,
       testsOk,
       hasConflictMarkers,
       fixTasksCreated: tasks.length,
     });
-    sweepSpan?.setStatus(buildOk && testsOk && !hasConflictMarkers ? "ok" : "error");
+    sweepSpan?.setStatus(buildOk && buildRunOk && testsOk && !hasConflictMarkers ? "ok" : "error");
     sweepSpan?.end();
 
-    return tasks;
+    // Adaptive sweep: errors detected, reset green counter and speed up
+    this.consecutiveGreenSweeps = 0;
+    this.adjustInterval(this.minIntervalMs);
+
+    return {
+      buildOk,
+      testsOk,
+      hasConflictMarkers,
+      buildOutput: buildOk ? "" : buildOutput.slice(0, 8000),
+      testOutput: testsOk ? "" : testOutput.slice(0, 8000),
+      conflictFiles,
+      fixTasks: tasks,
+    };
   }
 
   /**
    * Register callback for sweep completion
    */
-  onSweepComplete(callback: (tasks: Task[]) => void): void {
+  onSweepComplete(callback: (result: SweepResult) => void): void {
     this.sweepCompleteCallbacks.push(callback);
   }
 
@@ -291,5 +410,37 @@ export class Reconciler {
    */
   onError(callback: (error: Error) => void): void {
     this.errorCallbacks.push(callback);
+  }
+
+  getCurrentIntervalMs(): number {
+    return this.currentIntervalMs;
+  }
+
+  private adjustInterval(targetMs: number): void {
+    if (this.currentIntervalMs === targetMs) return;
+    this.currentIntervalMs = targetMs;
+
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = setInterval(async () => {
+        try {
+          const result = await this.sweep();
+          for (const cb of this.sweepCompleteCallbacks) {
+            cb(result);
+          }
+        } catch (error) {
+          const err = error instanceof Error ? error : new Error(String(error));
+          logger.error("Sweep failed", { error: err.message });
+          for (const cb of this.errorCallbacks) {
+            cb(err);
+          }
+        }
+      }, this.currentIntervalMs);
+    }
+
+    logger.info("Adjusted sweep interval", {
+      newIntervalMs: this.currentIntervalMs,
+      consecutiveGreen: this.consecutiveGreenSweeps,
+    });
   }
 }

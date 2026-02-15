@@ -42,13 +42,13 @@ ARGS=(
     --title "AgentSwarm"
     --background-colour 0D0D12
     --font-colour 888888
-    --seconds-per-day 1.5
+    --seconds-per-day 10.0
     --auto-skip-seconds 0.1
     --file-idle-time 0
     --max-file-lag 0.05
     --elasticity 0.03
-    --bloom-multiplier 0.8
-    --bloom-intensity 0.6
+    --bloom-multiplier 0.3
+    --bloom-intensity 0.2
     --highlight-users
     --user-scale 1.0
     --file-font-size 10

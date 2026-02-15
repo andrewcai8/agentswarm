@@ -10,11 +10,14 @@
 set -euo pipefail
 
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-AVATAR_DIR="$DIR/marketing/img/gource-avatars"
+AVATAR_DIR="$DIR/../marketing/img/gource-avatars"
 
 # ── Find Gource ──────────────────────────────────────────────────────────────
 GOURCE=""
-if [[ -f "$DIR/gource-bin/gource.exe" ]]; then
+PROJECT_ROOT="$(cd "$DIR/.." && pwd)"
+if [[ -f "$PROJECT_ROOT/gource-bin/gource.exe" ]]; then
+    GOURCE="$PROJECT_ROOT/gource-bin/gource.exe"
+elif [[ -f "$DIR/gource-bin/gource.exe" ]]; then
     GOURCE="$DIR/gource-bin/gource.exe"
 elif command -v gource &>/dev/null; then
     GOURCE="gource"
@@ -90,8 +93,31 @@ case "$MODE" in
     --replay)
         LOG="${2:-}"
         [[ -z "$LOG" || ! -f "$LOG" ]] && { echo "Usage: $0 --replay <file.ndjson>"; exit 1; }
-        echo "Replaying $LOG ..."
+        echo "Converting $LOG → Gource format..."
         python "$DIR/gource-adapter.py" < "$LOG" > "$DIR/.gource-replay.log"
+        LINES=$(wc -l < "$DIR/.gource-replay.log")
+        echo "  $LINES events converted"
+
+        # Real runs span minutes not days. Stretch timestamps to ~20 sim days
+        # so --seconds-per-day 4 gives a watchable ~80s animation.
+        FIRST_TS=$(head -1 "$DIR/.gource-replay.log" | cut -d'|' -f1)
+        LAST_TS=$(tail -1 "$DIR/.gource-replay.log" | cut -d'|' -f1)
+        SPAN=$((LAST_TS - FIRST_TS))
+        echo "  original span: ${SPAN}s"
+
+        if [[ "$SPAN" -lt 86400 ]]; then
+            echo "  stretching timestamps to 20 sim-days..."
+            TARGET=$((86400 * 20))
+            awk -F'|' -v base="$FIRST_TS" -v span="$SPAN" -v target="$TARGET" \
+                'BEGIN{OFS="|"} {
+                    if (span > 0) $1 = int(base + ($1 - base) * target / span);
+                    print
+                }' "$DIR/.gource-replay.log" > "$DIR/.gource-replay-stretched.log"
+            mv "$DIR/.gource-replay-stretched.log" "$DIR/.gource-replay.log"
+            echo "  new span: ${TARGET}s (~20 days)"
+        fi
+
+        echo "Launching Gource..."
         "$GOURCE" "${ARGS[@]}" "$DIR/.gource-replay.log"
         rm -f "$DIR/.gource-replay.log"
         ;;

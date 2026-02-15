@@ -1,25 +1,3 @@
-"""
-End-to-End Sandbox Test
-========================
-
-Tests the Modal sandbox infrastructure in layers:
-
-1. test_image_builds    — Verify the sandbox image has all required tools
-2. test_sandbox_basic   — Create sandbox, exec commands, terminate
-3. test_agent_server    — Deploy agent server in sandbox, hit HTTP endpoints
-4. test_full_agent      — Full agent loop with LLM (requires GLM-5 deployed)
-
-Usage:
-    # Run basic tests (no GPU, no LLM needed)
-    python scripts/test_sandbox.py basic
-
-    # Run image verification on Modal
-    python scripts/test_sandbox.py image
-
-    # Run full agent test (requires GLM-5 deployed)
-    python scripts/test_sandbox.py full --glm5-endpoint https://your-endpoint.modal.run
-"""
-
 import argparse
 import asyncio
 import json
@@ -36,11 +14,6 @@ import modal
 import aiohttp
 
 from infra.sandbox_image import create_agent_image, create_worker_image
-
-
-# =============================================================================
-# Test 1: Image builds and has all tools
-# =============================================================================
 
 def test_image_builds():
     """Verify the sandbox image builds and has all required tools."""

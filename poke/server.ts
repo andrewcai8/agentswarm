@@ -226,22 +226,52 @@ const httpServer = createServer(async (req, res) => {
   }
 });
 
+// Bind to 0.0.0.0 on Railway/container environments, localhost otherwise
 const HOST = process.env.RAILWAY_ENVIRONMENT ? "0.0.0.0" : "127.0.0.1";
 
-httpServer.listen(PORT, HOST, () => {
+httpServer.listen(PORT, HOST, async () => {
   console.log(`AgentSwarm Poke MCP server running on http://${HOST}:${PORT}/mcp`);
   console.log(`Health check: http://${HOST}:${PORT}/health`);
+  console.log("");
 
   if (process.env.RAILWAY_PUBLIC_DOMAIN) {
-    console.log("");
+    // --- Railway deployment ---
     console.log("Railway public URL:");
     console.log(`  https://${process.env.RAILWAY_PUBLIC_DOMAIN}/mcp`);
     console.log("");
-    console.log("Connect to Poke with:");
+    console.log("Connect to Poke:");
     console.log(`  npx poke mcp add https://${process.env.RAILWAY_PUBLIC_DOMAIN}/mcp --name "AgentSwarm"`);
   } else {
-    console.log("");
-    console.log("Next: In another terminal, run:");
-    console.log(`  npx poke tunnel http://localhost:${PORT}/mcp --name "AgentSwarm"`);
+    // --- Local dev: detect ngrok tunnel ---
+    try {
+      const resp = await fetch("http://127.0.0.1:4040/api/tunnels");
+      const data = (await resp.json()) as { tunnels: Array<{ public_url: string; config: { addr: string } }> };
+      const tunnel = data.tunnels.find(
+        (t) => t.config.addr.includes(String(PORT)) && t.public_url.startsWith("https"),
+      );
+      if (tunnel) {
+        console.log("ngrok tunnel detected:");
+        console.log(`  ${tunnel.public_url}/mcp`);
+        console.log("");
+        console.log("Connect to Poke:");
+        console.log(`  npx poke mcp add ${tunnel.public_url}/mcp --name "AgentSwarm"`);
+      } else {
+        printLocalInstructions();
+      }
+    } catch {
+      // ngrok not running — show manual instructions
+      printLocalInstructions();
+    }
   }
 });
+
+function printLocalInstructions(): void {
+  console.log("To expose to Poke, run one of these in another terminal:");
+  console.log("");
+  console.log("  Option A (ngrok):");
+  console.log(`    pnpm poke:ngrok`);
+  console.log(`    Then: npx poke mcp add https://<your-ngrok-url>/mcp --name "AgentSwarm"`);
+  console.log("");
+  console.log("  Option B (poke tunnel):");
+  console.log(`    pnpm poke:tunnel`);
+}

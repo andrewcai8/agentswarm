@@ -8,7 +8,9 @@ import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { Subplanner, shouldDecompose, DEFAULT_SUBPLANNER_CONFIG } from "./subplanner.js";
 import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
+import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
+import { ScopeTracker } from "./scope-tracker.js";
+import type { SweepResult } from "./reconciler.js";
 
 const logger = createLogger("planner", "root-planner");
 
@@ -28,6 +30,7 @@ const MAX_CONSECUTIVE_ERRORS = 10;
 
 const MAX_FILES_PER_HANDOFF = 30;
 const MAX_HANDOFF_SUMMARY_CHARS = 300;
+const MAX_TASK_RETRIES = 1;
 
 export interface PlannerConfig {
   maxIterations: number;
@@ -55,9 +58,17 @@ export class Planner {
   private handoffsSinceLastPlan: Handoff[];
   private activeTasks: Set<string>;
   private dispatchedTaskIds: Set<string>;
+  private scopeTracker: ScopeTracker;
 
   /** Scratchpad: rewritten (not appended) each iteration by the planner LLM. */
   private scratchpad: string;
+
+  private lastSweepResult: SweepResult | null = null;
+
+  // Delta tracking: avoid re-sending unchanged context each follow-up (~40K chars saved/iteration)
+  private previousFileTree: Set<string> = new Set();
+  private previousFeaturesHash: number = 0;
+  private previousDecisionsHash: number = 0;
 
   private tracer: Tracer | null = null;
   private rootSpan: Span | null = null;
@@ -96,6 +107,7 @@ export class Planner {
     this.handoffsSinceLastPlan = [];
     this.activeTasks = new Set();
     this.dispatchedTaskIds = new Set();
+    this.scopeTracker = new ScopeTracker();
 
     this.scratchpad = "";
 
@@ -297,7 +309,7 @@ export class Planner {
         return [];
       }
 
-      const { scratchpad, tasks: rawTasks } = this.parsePlannerResponse(responseText);
+      const { scratchpad, tasks: rawTasks } = parsePlannerResponse(responseText);
       logger.debug("Planner scratchpad", { scratchpad: scratchpad.slice(0, 500) });
       if (scratchpad) {
         this.scratchpad = scratchpad;
@@ -355,6 +367,14 @@ export class Planner {
   // Message builders
   // ---------------------------------------------------------------------------
 
+  private static contentHash(content: string): number {
+    let hash = 0;
+    for (let i = 0; i < content.length; i++) {
+      hash = ((hash << 5) - hash + content.charCodeAt(i)) | 0;
+    }
+    return hash;
+  }
+
   private buildInitialMessage(request: string, repoState: RepoState): string {
     let msg = `## Request\n${request}\n\n`;
 
@@ -378,22 +398,50 @@ export class Planner {
     msg += `## Recent Commits\n${repoState.recentCommits.join("\n")}\n\n`;
 
     msg += `This is the initial planning call. SPEC.md and FEATURES.json above are binding — your tasks must conform to the dependencies, file structure, and features they define. Produce your first batch of tasks and your scratchpad.\n`;
+
+    this.previousFileTree = new Set(repoState.fileTree);
+    this.previousFeaturesHash = repoState.featuresJson ? Planner.contentHash(repoState.featuresJson) : 0;
+    this.previousDecisionsHash = repoState.decisionsMd ? Planner.contentHash(repoState.decisionsMd) : 0;
+
     logger.debug("Built initial planner prompt", { length: msg.length, hasSpec: !!repoState.specMd, hasFeatures: !!repoState.featuresJson, hasAgents: !!repoState.agentsMd, hasDecisions: !!repoState.decisionsMd, fileTreeSize: repoState.fileTree.length, commitsCount: repoState.recentCommits.length });
     return msg;
   }
 
   private buildFollowUpMessage(repoState: RepoState, newHandoffs: Handoff[]): string {
     let msg = `## Updated Repository State\n`;
-    msg += `File tree:\n${repoState.fileTree.join("\n")}\n\n`;
+
+    const currentTree = new Set(repoState.fileTree);
+    const newFiles = repoState.fileTree.filter(f => !this.previousFileTree.has(f));
+    const removedFiles = [...this.previousFileTree].filter(f => !currentTree.has(f));
+
+    if (newFiles.length === 0 && removedFiles.length === 0) {
+      msg += `File tree: unchanged (${currentTree.size} files). Use read-only tools to explore specific paths.\n\n`;
+    } else if (newFiles.length > 50 || removedFiles.length > 50) {
+      msg += `File tree:\n${repoState.fileTree.join("\n")}\n\n`;
+    } else {
+      msg += `File tree (${currentTree.size} files):\n`;
+      if (newFiles.length > 0) msg += `  New: ${newFiles.join(", ")}\n`;
+      if (removedFiles.length > 0) msg += `  Removed: ${removedFiles.join(", ")}\n`;
+      msg += `\n`;
+    }
+    this.previousFileTree = currentTree;
+
     msg += `Recent commits:\n${repoState.recentCommits.join("\n")}\n\n`;
 
     if (repoState.featuresJson) {
-      msg += `## FEATURES.json\n${repoState.featuresJson}\n\n`;
+      const hash = Planner.contentHash(repoState.featuresJson);
+      if (hash !== this.previousFeaturesHash) {
+        msg += `## FEATURES.json (updated)\n${repoState.featuresJson}\n\n`;
+        this.previousFeaturesHash = hash;
+      }
     }
 
-    // DECISIONS.md may be updated by workers between iterations — re-inject fresh copy.
     if (repoState.decisionsMd) {
-      msg += `## DECISIONS.md (Architecture Decisions)\n${repoState.decisionsMd}\n\n`;
+      const hash = Planner.contentHash(repoState.decisionsMd);
+      if (hash !== this.previousDecisionsHash) {
+        msg += `## DECISIONS.md (updated)\n${repoState.decisionsMd}\n\n`;
+        this.previousDecisionsHash = hash;
+      }
     }
 
     if (newHandoffs.length > 0) {
@@ -426,145 +474,48 @@ export class Planner {
       msg += `\n`;
     }
 
-    if (this.dispatchedTaskIds.size > 0) {
-      msg += `## All Previously Dispatched Task IDs (${this.dispatchedTaskIds.size})\n`;
-      msg += `DO NOT re-emit any of these IDs: ${[...this.dispatchedTaskIds].join(", ")}\n\n`;
+    const mergeStats = this.mergeQueue.getMergeStats();
+    const mergeQueueLen = this.mergeQueue.getQueueLength();
+    msg += `## Merge Queue Health\n`;
+    msg += `Merged: ${mergeStats.totalMerged} | Conflicts: ${mergeStats.totalConflicts} | Failed: ${mergeStats.totalFailed} | Queue depth: ${mergeQueueLen}\n`;
+    if (mergeStats.totalMerged + mergeStats.totalConflicts > 0) {
+      const rate = Math.round((mergeStats.totalMerged / (mergeStats.totalMerged + mergeStats.totalConflicts)) * 100);
+      msg += `Success rate: ${rate}%\n`;
+    }
+    msg += `\n`;
+
+    const lockedFiles = this.scopeTracker.getLockedFiles();
+    if (lockedFiles.length > 0) {
+      msg += `## Currently Locked File Scopes (${lockedFiles.length} files)\n`;
+      msg += `These files are being modified by active tasks — avoid assigning new work to them:\n`;
+      msg += lockedFiles.join(", ") + `\n\n`;
     }
 
-    msg += `Continue planning. Review the new handoffs and current state. Rewrite your scratchpad and emit the next batch of tasks.\n`;
-    logger.debug("Built follow-up planner prompt", { length: msg.length, newHandoffs: newHandoffs.length, activeTasks: this.activeTasks.size, dispatchedIds: this.dispatchedTaskIds.size });
+    if (this.lastSweepResult) {
+      const sr = this.lastSweepResult;
+      msg += `## Build/Test Health\n`;
+      msg += `Build: ${sr.buildOk ? "PASS" : "FAIL"}`;
+      if (!sr.buildOk && sr.buildOutput) {
+        msg += ` — errors:\n\`\`\`\n${sr.buildOutput.slice(0, 2000)}\n\`\`\``;
+      }
+      msg += `\nTests: ${sr.testsOk ? "PASS" : "FAIL"}`;
+      if (!sr.testsOk && sr.testOutput) {
+        msg += ` — output:\n\`\`\`\n${sr.testOutput.slice(0, 2000)}\n\`\`\``;
+      }
+      msg += `\n`;
+      if (sr.hasConflictMarkers) {
+        msg += `Conflict markers in: ${sr.conflictFiles.join(", ")}\n`;
+      }
+      msg += `\n`;
+    }
+
+    msg += `Continue planning. Review new handoffs and state changes. Rewrite your scratchpad and emit the next batch of tasks. Task ID deduplication is handled automatically — do not re-emit previously used IDs.`;
+    if (this.lastSweepResult && (!this.lastSweepResult.buildOk || !this.lastSweepResult.testsOk)) {
+      msg += ` Build/tests are failing — emit targeted fix tasks.`;
+    }
+    msg += `\n`;
+    logger.debug("Built follow-up planner prompt", { length: msg.length, newHandoffs: newHandoffs.length, activeTasks: this.activeTasks.size, fileTreeDelta: newFiles.length + removedFiles.length });
     return msg;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Response parsing
-  // ---------------------------------------------------------------------------
-
-  /**
-   * Parse the planner response. Accepts two formats:
-   *
-   * 1. Structured: { "scratchpad": "...", "tasks": [...] }
-   * 2. Legacy fallback: plain JSON array of tasks (no scratchpad)
-   *
-   * If the JSON is truncated (e.g. max_tokens hit), attempts to salvage
-   * any complete task objects from the partial response.
-   */
-  private parsePlannerResponse(content: string): { scratchpad: string; tasks: RawTaskInput[] } {
-    // Try structured JSON object first.
-    try {
-      let cleaned = content.trim();
-      const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-      if (fenceMatch) {
-        cleaned = fenceMatch[1].trim();
-      }
-
-      // Find the outermost { ... } if there's surrounding text.
-      const objStart = cleaned.indexOf("{");
-      const objEnd = cleaned.lastIndexOf("}");
-      if (objStart !== -1 && objEnd > objStart) {
-        const candidate = cleaned.slice(objStart, objEnd + 1);
-        const parsed = JSON.parse(candidate);
-
-        if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.tasks)) {
-          return {
-            scratchpad: typeof parsed.scratchpad === "string" ? parsed.scratchpad : "",
-            tasks: parsed.tasks,
-          };
-        }
-      }
-    } catch {
-      // JSON parse failed — may be truncated. Try salvage before legacy fallback.
-      const salvaged = this.salvageTruncatedResponse(content);
-      if (salvaged.tasks.length > 0) {
-        logger.warn("Salvaged tasks from truncated LLM response", {
-          tasksRecovered: salvaged.tasks.length,
-          contentLength: content.length,
-        });
-        return salvaged;
-      }
-    }
-
-    // Fallback: plain JSON task array (backward compatible with subplanner/reconciler format).
-    try {
-      const tasks = parseLLMTaskArray(content);
-      return { scratchpad: "", tasks };
-    } catch {
-      logger.warn("Failed to parse planner response", { contentPreview: content.slice(0, 300) });
-      return { scratchpad: "", tasks: [] };
-    }
-  }
-
-  /**
-   * Attempt to recover complete task objects from a truncated JSON response.
-   *
-   * Strategy: find all complete JSON objects within the "tasks" array by
-   * matching balanced braces. Each task that parses successfully is kept.
-   */
-  private salvageTruncatedResponse(content: string): { scratchpad: string; tasks: RawTaskInput[] } {
-    let scratchpad = "";
-    const tasks: RawTaskInput[] = [];
-
-    // Try to extract scratchpad from partial JSON.
-    const scratchpadMatch = content.match(/"scratchpad"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-    if (scratchpadMatch) {
-      try {
-        scratchpad = JSON.parse(`"${scratchpadMatch[1]}"`);
-      } catch {
-        scratchpad = scratchpadMatch[1];
-      }
-    }
-
-    // Find the "tasks" array start.
-    const tasksKeyMatch = content.match(/"tasks"\s*:\s*\[/);
-    if (!tasksKeyMatch || tasksKeyMatch.index === undefined) {
-      return { scratchpad, tasks };
-    }
-
-    const tasksArrayStart = tasksKeyMatch.index + tasksKeyMatch[0].length;
-    const remainder = content.slice(tasksArrayStart);
-
-    // Extract individual task objects by tracking brace depth.
-    let depth = 0;
-    let objStart = -1;
-
-    for (let i = 0; i < remainder.length; i++) {
-      const ch = remainder[i];
-
-      // Skip strings to avoid counting braces inside string values.
-      if (ch === '"') {
-        i++;
-        while (i < remainder.length) {
-          if (remainder[i] === '\\') {
-            i++; // skip escaped character
-          } else if (remainder[i] === '"') {
-            break;
-          }
-          i++;
-        }
-        continue;
-      }
-
-      if (ch === '{') {
-        if (depth === 0) objStart = i;
-        depth++;
-      } else if (ch === '}') {
-        depth--;
-        if (depth === 0 && objStart !== -1) {
-          const objStr = remainder.slice(objStart, i + 1);
-          try {
-            const task = JSON.parse(objStr) as RawTaskInput;
-            if (task.description) {
-              tasks.push(task);
-            }
-          } catch {
-            // Malformed task object — skip it.
-          }
-          objStart = -1;
-        }
-      }
-    }
-
-    return { scratchpad, tasks };
   }
 
   // ---------------------------------------------------------------------------
@@ -606,6 +557,17 @@ export class Planner {
         this.activeTasks.delete(task.id);
         dispatchSpan?.end();
         return;
+      }
+
+      if (task.scope.length > 0) {
+        const overlaps = this.scopeTracker.getOverlaps(task.id, task.scope);
+        if (overlaps.length > 0) {
+          logger.warn("Scope overlap detected", {
+            taskId: task.id,
+            overlaps: overlaps.map((o) => ({ taskId: o.taskId, files: o.overlappingFiles })),
+          });
+        }
+        this.scopeTracker.register(task.id, task.scope);
       }
 
       try {
@@ -674,6 +636,7 @@ export class Planner {
         this.pendingHandoffs.push({ task, handoff: failureHandoff });
         dispatchSpan?.setStatus("error", err.message);
       } finally {
+        this.scopeTracker.release(task.id);
         this.dispatchLimiter.release();
         this.activeTasks.delete(task.id);
         dispatchSpan?.end();
@@ -702,7 +665,26 @@ export class Planner {
       this.handoffsSinceLastPlan.push(handoff);
 
       if (handoff.status === "complete") {
-        this.mergeQueue.enqueue(task.branch);
+        if (task.conflictSourceBranch) {
+          this.mergeQueue.resetRetryCount(task.branch);
+        }
+        this.mergeQueue.enqueue(task.branch, task.priority);
+      } else if (
+        (handoff.status === "failed" || handoff.status === "blocked") &&
+        (task.retryCount ?? 0) < MAX_TASK_RETRIES
+      ) {
+        const retried = this.taskQueue.retryTask(task.id);
+        if (retried) {
+          logger.info("Auto-retrying failed task", {
+            taskId: task.id,
+            previousStatus: handoff.status,
+            retryCount: task.retryCount,
+            maxRetries: MAX_TASK_RETRIES,
+            failureReason: handoff.summary.slice(0, 200),
+          });
+          this.activeTasks.add(task.id);
+          this.dispatchSingleTask(task);
+        }
       }
 
       logger.debug("Handoff details", { taskId: task.id, status: handoff.status, diffSize: handoff.diff.length, summary: handoff.summary.slice(0, 300), concerns: handoff.concerns, suggestions: handoff.suggestions });
@@ -737,6 +719,18 @@ export class Planner {
     this.activeTasks.add(task.id);
     this.dispatchSingleTask(task);
     logger.info("Injected external task", { taskId: task.id });
+  }
+
+  getScopeTracker(): ScopeTracker {
+    return this.scopeTracker;
+  }
+
+  setLastSweepResult(result: SweepResult): void {
+    this.lastSweepResult = result;
+  }
+
+  getActiveTaskCount(): number {
+    return this.activeTasks.size;
   }
 
   // ---------------------------------------------------------------------------

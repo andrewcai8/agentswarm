@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>AgentSwarm 3D Graph — Enhanced</title>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128/examples/js/controls/OrbitControls.js"></script>
+
+<style>
+*{margin:0;padding:0}
+body{background:#0f1117;overflow:hidden;font-family:JetBrains Mono, monospace}
+
+#hud,#legend{
+ position:absolute;
+ color:#ccc;
+ font-size:12px;
+ background:rgba(0,0,0,0.35);
+ padding:10px;
+ border-radius:8px;
+ backdrop-filter:blur(4px);
+}
+
+#hud{top:16px;left:16px}
+#legend{bottom:16px;left:16px}
+.val{color:#fff}
+</style>
+</head>
+<body>
+
+<div id="hud">
+workers: <span class="val" id="hud-workers">0</span><br>
+completed: <span class="val" id="hud-completed">0</span><br>
+tokens: <span class="val" id="hud-tokens">0</span><br>
+commits/hr: <span class="val" id="hud-cph">0</span><br>
+merge rate: <span class="val" id="hud-merge">0</span><br>
+hours: <span class="val" id="hud-hours">0</span>
+</div>
+
+<div id="legend">
+Planner – Gold<br>
+Sub Planner – Yellow<br>
+Worker – Blue<br>
+Complete – Green<br>
+Failed – Pink
+</div>
+
+<script>
+const ROLE_COLORS={
+"root-planner":0x66ccff,
+"planner":0xffd700,
+"subplanner":0xffd700,
+"worker":0x88aaff
+};
+
+const STATUS_COLORS={
+"complete":0x33ff99,
+"failed":0xff4477
+};
+
+const scene=new THREE.Scene();
+scene.fog=new THREE.FogExp2(0x0f1117,0.015);
+
+const camera=new THREE.PerspectiveCamera(60,innerWidth/innerHeight,0.1,1000);
+camera.position.set(0,8,30);
+
+const renderer=new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(innerWidth,innerHeight);
+renderer.toneMapping=THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure=1.3;
+document.body.appendChild(renderer.domElement);
+
+const controls=new THREE.OrbitControls(camera,renderer.domElement);
+controls.enableDamping=true;
+controls.autoRotate=true;
+controls.autoRotateSpeed=0.25;
+
+scene.add(new THREE.AmbientLight(0xffffff,0.3));
+const light=new THREE.PointLight(0xffffff,1,200);
+light.position.set(10,20,10);
+scene.add(light);
+
+const graph={nodes:new Map(),edges:[]};
+const group=new THREE.Group();
+scene.add(group);
+
+function glowTex(){
+const c=document.createElement("canvas");
+c.width=c.height=128;
+const ctx=c.getContext("2d");
+const g=ctx.createRadialGradient(64,64,0,64,64,64);
+g.addColorStop(0,"rgba(255,255,255,.6)");
+g.addColorStop(.5,"rgba(255,255,200,.2)");
+g.addColorStop(1,"rgba(0,0,0,0)");
+ctx.fillStyle=g;
+ctx.fillRect(0,0,128,128);
+return new THREE.CanvasTexture(c);
+}
+const glow=glowTex();
+
+function addNode(id,role,status,parent){
+if(graph.nodes.has(id))return;
+let geo,rad=0.7;
+
+if(role==="root-planner"){
+geo=new THREE.CylinderGeometry(.4,.8,2,16);
+}else{
+geo=new THREE.SphereGeometry(rad,24,24);
+}
+
+const color=STATUS_COLORS[status]||ROLE_COLORS[role]||0xffffff;
+const mat=new THREE.MeshStandardMaterial({color,emissive:color,emissiveIntensity:.35});
+const mesh=new THREE.Mesh(geo,mat);
+mesh.position.set((Math.random()-0.5)*20,(Math.random()-0.5)*12,(Math.random()-0.5)*20);
+group.add(mesh);
+
+const sprite=new THREE.Sprite(new THREE.SpriteMaterial({
+map:glow,color,transparent:true,blending:THREE.AdditiveBlending
+}));
+sprite.scale.set(4,4,1);
+mesh.add(sprite);
+
+graph.nodes.set(id,{mesh,sprite,role,parent,x:mesh.position.x,y:mesh.position.y,z:mesh.position.z,vx:0,vy:0,vz:0});
+}
+
+function simulate(){
+const nodes=[...graph.nodes.values()];
+for(let i=0;i<nodes.length;i++){
+for(let j=i+1;j<nodes.length;j++){
+const a=nodes[i],b=nodes[j];
+let dx=a.x-b.x,dy=a.y-b.y,dz=a.z-b.z;
+let d=Math.sqrt(dx*dx+dy*dy+dz*dz)||.1;
+let f=25/(d*d);
+a.vx+=dx/d*f;b.vx-=dx/d*f;
+a.vy+=dy/d*f;b.vy-=dy/d*f;
+a.vz+=dz/d*f;b.vz-=dz/d*f;
+}
+}
+for(const n of nodes){
+n.vx*=.92;n.vy*=.92;n.vz*=.92;
+n.x+=n.vx;n.y+=n.vy;n.z+=n.vz;
+n.mesh.position.set(n.x,n.y,n.z);
+const s=1+Math.sin(performance.now()*0.003)*.2;
+n.sprite.scale.set(4*s,4*s,1);
+}
+}
+
+function animate(){
+requestAnimationFrame(animate);
+simulate();
+controls.update();
+renderer.render(scene,camera);
+}
+animate();
+
+function ingest(e){
+addNode(e.data.taskId,e.agentRole||"worker","running",e.data.parentId);
+if(e.message==="Metrics"){
+document.getElementById("hud-workers").textContent=e.data.activeWorkers||0;
+document.getElementById("hud-completed").textContent=e.data.completedTasks||0;
+document.getElementById("hud-tokens").textContent=e.data.totalTokensUsed||0;
+document.getElementById("hud-cph").textContent=e.data.commitsPerHour||0;
+document.getElementById("hud-merge").textContent=e.data.mergeSuccessRate||0;
+document.getElementById("hud-hours").textContent=e.data.hoursSpent||0;
+}
+}
+
+const DEMO=[];
+for(let i=0;i<70;i++){
+DEMO.push({agentRole:"worker",message:"Task created",data:{taskId:"task-"+i,parentId:null}});
+}
+
+let i=0;
+setInterval(()=>{
+ingest(DEMO[i]);
+i=(i+1)%DEMO.length;
+},150);
+
+</script>
+</body>
+</html>

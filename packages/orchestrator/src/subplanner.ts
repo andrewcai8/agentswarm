@@ -6,7 +6,16 @@ import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
+import {
+  type RepoState,
+  type RawTaskInput,
+  readRepoState,
+  parsePlannerResponse,
+  parseLLMTaskArray,
+  ConcurrencyLimiter,
+  slugifyForBranch,
+  evaluateHandoffMergeEligibility,
+} from "./shared.js";
 
 const logger = createLogger("subplanner", "subplanner");
 
@@ -375,6 +384,29 @@ export class Subplanner {
       for (const subtask of allSubtasks) {
         const taskObj = this.taskQueue.getById(subtask.id);
         if (taskObj?.status === "complete") {
+          const handoff = allHandoffs.find((h) => h.taskId === subtask.id);
+          if (!handoff) {
+            logger.warn("Missing handoff for completed subtask; skipping merge enqueue", {
+              subtaskId: subtask.id,
+              branch: subtask.branch,
+            });
+            continue;
+          }
+
+          const mergeEligibility = evaluateHandoffMergeEligibility(handoff);
+          if (!mergeEligibility.eligible) {
+            logger.warn("Subtask merge gate blocked branch enqueue", {
+              subtaskId: subtask.id,
+              branch: subtask.branch,
+              reasons: mergeEligibility.reasons,
+            });
+            this.monitor.recordSuspiciousTask(
+              subtask.id,
+              `subtask merge gate violation: ${mergeEligibility.reasons.join("; ")}`
+            );
+            continue;
+          }
+
           this.mergeQueue.enqueue(subtask.branch, subtask.priority);
         }
       }
@@ -588,6 +620,26 @@ export class Subplanner {
             }
 
             this.monitor.recordTokenUsage(handoff.metrics.tokensUsed);
+          }
+
+          const mergeEligibility = evaluateHandoffMergeEligibility(handoff);
+          if (handoff.status === "complete" && !mergeEligibility.eligible) {
+            const verificationFailureSummary = mergeEligibility.reasons.join("; ");
+            logger.warn("Verification gate blocked completed subtask handoff", {
+              subtaskId: subtask.id,
+              reasons: mergeEligibility.reasons,
+            });
+
+            handoff = {
+              ...handoff,
+              status: "failed",
+              summary: `Verification gate blocked merge: ${verificationFailureSummary}. ${handoff.summary}`,
+              concerns: [...new Set([...handoff.concerns, ...mergeEligibility.reasons])],
+              suggestions: [...new Set([
+                ...handoff.suggestions,
+                "Fix verification failures and rerun this subtask before merge",
+              ])],
+            };
           }
 
           if (handoff.status === "complete") {

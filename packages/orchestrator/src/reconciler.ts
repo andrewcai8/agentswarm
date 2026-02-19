@@ -18,14 +18,14 @@ const execFileAsync = promisify(execFile);
 const logger = createLogger("reconciler", "reconciler");
 
 export interface ReconcilerConfig {
-  /** How often to sweep (ms). Default 300_000 = 5 min */
+  /** How often to sweep (ms). Default 60_000 = 1 min */
   intervalMs: number;
   /** Max fix tasks created per sweep. Default 5 */
   maxFixTasks: number;
 }
 
 export const DEFAULT_RECONCILER_CONFIG: ReconcilerConfig = {
-  intervalMs: 300_000,
+  intervalMs: 60_000,
   maxFixTasks: 5,
 };
 
@@ -112,7 +112,7 @@ export class Reconciler {
     this.fixCounter = 0;
 
     this.consecutiveGreenSweeps = 0;
-    this.minIntervalMs = Math.min(60_000, reconcilerConfig.intervalMs);
+    this.minIntervalMs = Math.min(30_000, reconcilerConfig.intervalMs);
     this.maxIntervalMs = reconcilerConfig.intervalMs;
     this.currentIntervalMs = reconcilerConfig.intervalMs;
 

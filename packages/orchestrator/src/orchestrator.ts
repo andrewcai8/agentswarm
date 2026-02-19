@@ -88,7 +88,7 @@ export interface CreateOrchestratorOptions {
   /** Max planner iterations before stopping. Default: 100. */
   maxIterations?: number;
 
-  /** Reconciler sweep interval in ms. Default: 300_000 (5 min). */
+  /** Reconciler sweep interval in ms. Default: 60_000 (1 min). */
   reconcilerIntervalMs?: number;
 
   /** Max fix tasks per reconciler sweep. Default: 5. */
@@ -221,7 +221,7 @@ export async function createOrchestrator(
   const reconciler = new Reconciler(
     config,
     {
-      intervalMs: options.reconcilerIntervalMs ?? 300_000,
+      intervalMs: options.reconcilerIntervalMs ?? 60_000,
       maxFixTasks: options.reconcilerMaxFixTasks ?? 5,
     },
     taskQueue,

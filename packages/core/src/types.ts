@@ -42,6 +42,8 @@ export interface Handoff {
   };
   /** tsc --noEmit exit code from post-agent build check. null = check did not run. */
   buildExitCode?: number | null;
+  /** npm test exit code from post-agent verification. null = check did not run. */
+  testExitCode?: number | null;
 }
 
 // Worker sandbox status

@@ -280,9 +280,7 @@ export async function createOrchestrator(
 
         const timedOut = workerPool.drainTimedOutBranches();
         for (const branch of timedOut) {
-          execFileAsync("git", ["push", "origin", "--delete", branch], { cwd: config.targetRepoPath })
-            .then(() => logger.info("Cleaned up timed-out branch", { branch }))
-            .catch(() => { /* branch may already be gone */ });
+          logger.info("Timed-out branch preserved for finalization retry", { branch });
         }
       });
 
@@ -311,29 +309,21 @@ export async function createOrchestrator(
       });
 
       let conflictCounter = 0;
-      const MAX_CONFLICT_FIX_TASKS = 10;
-
-      const deleteRemoteBranch = (branch: string): void => {
-        execFileAsync("git", ["push", "origin", "--delete", branch], { cwd: config.targetRepoPath })
-          .then(() => logger.info("Deleted abandoned remote branch", { branch }))
-          .catch(() => { /* branch may already be gone */ });
-      };
+      const MAX_CONFLICT_FIX_TASKS = 30;
 
       mergeQueue.onConflict((info) => {
         if (info.branch.includes("conflict-fix")) {
           logger.warn("Skipping conflict-fix for conflict-fix branch (cascade prevention)", {
             branch: info.branch,
           });
-          deleteRemoteBranch(info.branch);
           return;
         }
 
         if (conflictCounter >= MAX_CONFLICT_FIX_TASKS) {
-          logger.warn("Conflict-fix budget exhausted, skipping", {
+          logger.warn("Conflict-fix budget exhausted, skipping (branch preserved for finalization)", {
             branch: info.branch,
             limit: MAX_CONFLICT_FIX_TASKS,
           });
-          deleteRemoteBranch(info.branch);
           return;
         }
 
@@ -415,7 +405,25 @@ export async function createOrchestrator(
             }
           }
 
-          // Step 2: Synchronous reconciler sweep
+          // Step 2: Re-enqueue unmerged branches for another attempt
+          const allBranches = planner.getAllDispatchedBranches();
+          const unmerged = allBranches.filter(b => !mergeQueue.isBranchMerged(b));
+          if (unmerged.length > 0) {
+            logger.info("Re-enqueuing unmerged branches (retry counts reset)", {
+              count: unmerged.length,
+              branches: unmerged,
+            });
+            for (const branch of unmerged) {
+              mergeQueue.resetRetryCount(branch);
+              mergeQueue.enqueue(branch, 1);
+            }
+            const retryResults = await mergeQueue.processQueue();
+            for (const result of retryResults) {
+              monitor.recordMergeAttempt(result.success);
+            }
+          }
+
+          // Step 3: Synchronous reconciler sweep
           logger.info("Running finalization sweep (build + test + conflict check)");
           let sweepResult: SweepResult;
           try {
@@ -433,13 +441,15 @@ export async function createOrchestrator(
           finalBuildOk = sweepResult.buildOk;
           finalTestsOk = sweepResult.testsOk;
 
-          // Step 3: All green?
-          if (sweepResult.buildOk && sweepResult.testsOk && !sweepResult.hasConflictMarkers) {
-            logger.info("Finalization sweep PASSED — all green!", { attempt });
+          // Step 4: Check branch completeness
+          const postSweepUnmerged = allBranches.filter(b => !mergeQueue.isBranchMerged(b));
+          const allMerged = postSweepUnmerged.length === 0;
+
+          if (sweepResult.buildOk && sweepResult.testsOk && !sweepResult.hasConflictMarkers && allMerged) {
+            logger.info("Finalization sweep PASSED — all green, all branches merged!", { attempt });
             break;
           }
 
-          // Step 4: Not green
           logger.info("Finalization sweep found issues", {
             attempt,
             buildOk: sweepResult.buildOk,
@@ -447,10 +457,11 @@ export async function createOrchestrator(
             hasConflictMarkers: sweepResult.hasConflictMarkers,
             conflictFiles: sweepResult.conflictFiles.length,
             fixTaskCount: sweepResult.fixTasks.length,
+            allMerged,
+            unmergedBranches: postSweepUnmerged.length,
           });
 
-          // Step 5: No fix tasks generated — cannot self-heal
-          if (sweepResult.fixTasks.length === 0) {
+          if (sweepResult.fixTasks.length === 0 && allMerged) {
             logger.warn("Sweep found failures but generated no fix tasks — cannot self-heal", {
               buildOk: sweepResult.buildOk,
               testsOk: sweepResult.testsOk,
@@ -459,35 +470,51 @@ export async function createOrchestrator(
             break;
           }
 
-          // Don't inject tasks on last attempt — we can't verify them
           if (attempt >= config.finalization.maxAttempts) {
-            logger.warn("Max finalization attempts reached — skipping fix task injection", {
+            logger.warn("Max finalization attempts reached", {
               attempt,
               fixTasks: sweepResult.fixTasks.length,
+              unmergedBranches: postSweepUnmerged.length,
             });
             break;
           }
 
-          // Step 6: Inject fix tasks and wait for completion
-          for (const task of sweepResult.fixTasks) {
-            planner.injectTask(task);
-          }
-
-          logger.info("Waiting for finalization fix tasks to complete", {
-            count: sweepResult.fixTasks.length,
-          });
-          const fixWaitStart = Date.now();
-          const fixWaitTimeout = config.finalization.sweepTimeoutMs;
-          while (planner.getActiveTaskCount() > 0) {
-            if (Date.now() - fixWaitStart > fixWaitTimeout) {
-              logger.warn("Timed out waiting for finalization fix tasks", {
-                activeCount: planner.getActiveTaskCount(),
-                timeoutMs: fixWaitTimeout,
-              });
-              break;
+          // Step 5: Inject fix tasks and wait for completion
+          if (sweepResult.fixTasks.length > 0) {
+            for (const task of sweepResult.fixTasks) {
+              planner.injectTask(task);
             }
-            await new Promise((r) => setTimeout(r, 1000));
+
+            logger.info("Waiting for finalization fix tasks to complete", {
+              count: sweepResult.fixTasks.length,
+            });
+            const fixWaitStart = Date.now();
+            const fixWaitTimeout = config.finalization.sweepTimeoutMs;
+            while (planner.getActiveTaskCount() > 0) {
+              if (Date.now() - fixWaitStart > fixWaitTimeout) {
+                logger.warn("Timed out waiting for finalization fix tasks", {
+                  activeCount: planner.getActiveTaskCount(),
+                  timeoutMs: fixWaitTimeout,
+                });
+                break;
+              }
+              await new Promise((r) => setTimeout(r, 1000));
+            }
           }
+        }
+
+        // Final branch completeness assessment
+        const finalAllBranches = planner.getAllDispatchedBranches();
+        const finalUnmerged = finalAllBranches.filter(b => !mergeQueue.isBranchMerged(b));
+        const finalAllMerged = finalUnmerged.length === 0;
+
+        if (finalUnmerged.length > 0) {
+          logger.warn("Run finished with unmerged branches (preserved on remote for manual recovery)", {
+            total: finalAllBranches.length,
+            merged: finalAllBranches.length - finalUnmerged.length,
+            unmerged: finalUnmerged.length,
+            branches: finalUnmerged,
+          });
         }
 
         const finalizationDuration = Date.now() - finalizationStart;
@@ -495,16 +522,20 @@ export async function createOrchestrator(
           attempts: attempt,
           buildPassed: finalBuildOk,
           testsPassed: finalTestsOk,
+          allMerged: finalAllMerged,
+          unmergedCount: finalUnmerged.length,
           durationMs: finalizationDuration,
         });
 
-        const passed = finalBuildOk && finalTestsOk;
+        const passed = finalBuildOk && finalTestsOk && finalAllMerged;
         if (cb?.onFinalizationComplete) cb.onFinalizationComplete(attempt, passed);
 
         logger.info("Finalization phase complete", {
           attempts: attempt,
           buildPassed: finalBuildOk,
           testsPassed: finalTestsOk,
+          allMerged: finalAllMerged,
+          unmergedBranches: finalUnmerged.length,
           durationMs: finalizationDuration,
           passed,
         });

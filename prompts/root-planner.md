@@ -365,10 +365,17 @@ After you return `{ "scratchpad": "...", "tasks": [] }`, the system does NOT imm
 - Build failures reported in worker handoffs (via `buildExitCode`) are early signals. If multiple workers report build failures, consider emitting a fix task before waiting for finalization.
 
 **When to truly return `[]`:**
-- All features in FEATURES.json are covered by completed tasks.
-- No critical concerns remain unaddressed in your scratchpad.
-- You've reviewed recent handoffs and no systemic issues remain.
-- The Build/Test Health section (if present) shows passing status, OR you've already emitted fix tasks for known failures.
+
+Meeting every feature in FEATURES.json is the **minimum**, not the finish line. Before returning `[]`, run these checks — if any produce tasks, you are not done:
+
+1. **Feature depth**: For each completed feature, check whether workers handled only the happy path. Missing error handling, unvalidated inputs, and ignored edge cases from the spec are gaps — emit fix tasks.
+2. **Cross-feature integration**: Read the code (use your tools) where two or more features interact. If the integration is untested, fragile, or missing, emit a task to wire it properly.
+3. **TODO/stub audit**: Grep the codebase for `TODO`, `FIXME`, `HACK`, and placeholder implementations. Each one is an unfinished task — emit it or consciously decide it's out of scope and document why in your scratchpad.
+4. **Scratchpad concerns**: Every concern in your scratchpad must be resolved or explicitly marked out-of-scope with rationale. Unaddressed concerns from earlier sprints are planning failures.
+5. **Build/test health**: The Build/Test Health section (if present) shows passing status, OR you've already emitted fix tasks for known failures.
+6. **Spec compliance**: Re-read SPEC.md. Verify that architectural constraints, naming conventions, and dependency choices are followed across the actual codebase — not just in the tasks you planned.
+
+Return `[]` only after all six checks pass. The project should be something you'd ship confidently — not something that merely satisfies a checklist.
 
 ---
 

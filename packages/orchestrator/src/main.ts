@@ -209,6 +209,19 @@ async function main(): Promise<void> {
   const finalSnapshot = await orchestrator.run(request);
 
   finalize(finalSnapshot);
+
+  const buildOk = finalSnapshot.finalizationBuildPassed !== false;
+  const testsOk = finalSnapshot.finalizationTestsPassed !== false;
+  const allMerged = finalSnapshot.finalizationAllMerged !== false;
+  if (!buildOk || !testsOk || !allMerged) {
+    logger.error("Run did not pass finalization", {
+      buildOk,
+      testsOk,
+      allMerged,
+      unmergedCount: finalSnapshot.finalizationUnmergedCount ?? 0,
+    });
+    process.exit(1);
+  }
 }
 
 main().catch((error) => {

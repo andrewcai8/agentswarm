@@ -28,6 +28,8 @@ export class Monitor {
     attempts: number;
     buildPassed: boolean;
     testsPassed: boolean;
+    allMerged: boolean;
+    unmergedCount: number;
     durationMs: number;
   } | null = null;
 
@@ -142,6 +144,8 @@ export class Monitor {
       snapshot.finalizationAttempts = this.finalizationMetrics.attempts;
       snapshot.finalizationBuildPassed = this.finalizationMetrics.buildPassed;
       snapshot.finalizationTestsPassed = this.finalizationMetrics.testsPassed;
+      snapshot.finalizationAllMerged = this.finalizationMetrics.allMerged;
+      snapshot.finalizationUnmergedCount = this.finalizationMetrics.unmergedCount;
       snapshot.finalizationDurationMs = this.finalizationMetrics.durationMs;
     }
 
@@ -178,6 +182,8 @@ export class Monitor {
     attempts: number;
     buildPassed: boolean;
     testsPassed: boolean;
+    allMerged: boolean;
+    unmergedCount: number;
     durationMs: number;
   }): void {
     this.finalizationMetrics = metrics;

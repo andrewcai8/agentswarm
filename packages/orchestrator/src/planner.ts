@@ -733,6 +733,17 @@ export class Planner {
     return this.activeTasks.size;
   }
 
+  getAllDispatchedBranches(): string[] {
+    const branches: string[] = [];
+    for (const taskId of this.dispatchedTaskIds) {
+      const task = this.taskQueue.getById(taskId);
+      if (task?.branch) {
+        branches.push(task.branch);
+      }
+    }
+    return branches;
+  }
+
   // ---------------------------------------------------------------------------
   // Callbacks
   // ---------------------------------------------------------------------------

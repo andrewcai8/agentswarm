@@ -46,6 +46,34 @@ async function abortMerge(cwd: string): Promise<void> {
   }
 }
 
+/**
+ * Nuclear git cleanup — guarantees the working tree and index are clean and
+ * HEAD points at `mainBranch`.  Used as a defensive pre-check before every
+ * merge attempt and as a last-resort recovery after failures.
+ *
+ * Sequence: abort any in-progress rebase/merge → hard-reset index → remove
+ * untracked files → checkout main.  Every step is wrapped in try/catch so
+ * the function never throws.
+ */
+async function ensureCleanState(mainBranch: string, cwd: string): Promise<void> {
+  // 1. Abort any in-progress operation
+  await abortMerge(cwd);
+  // 2. Hard-reset to discard any dirty index / working-tree changes
+  try { await execFileAsync("git", ["reset", "--hard", "HEAD"], { cwd }); } catch { /* best effort */ }
+  // 3. Remove untracked files left by temp branches or partial merges
+  try { await execFileAsync("git", ["clean", "-fd"], { cwd }); } catch { /* best effort */ }
+  // 4. Delete any leftover retry-rebase-* temp branches
+  try {
+    const { stdout } = await execFileAsync("git", ["branch", "--list", "retry-rebase-*"], { cwd });
+    const branches = stdout.trim().split("\n").map(b => b.trim()).filter(Boolean);
+    for (const branch of branches) {
+      try { await execFileAsync("git", ["branch", "-D", branch], { cwd }); } catch { /* best effort */ }
+    }
+  } catch { /* best effort */ }
+  // 5. Get back to main
+  try { await execFileAsync("git", ["checkout", mainBranch], { cwd }); } catch { /* best effort */ }
+}
+
 const logger = createLogger("merge-queue", "root-planner");
 
 interface MergeQueueEntry {
@@ -224,7 +252,8 @@ export class MergeQueue {
     }
 
     try {
-      // Fetch the branch from origin (workers push branches to remote)
+      await ensureCleanState(this.mainBranch, cwd);
+
       try {
         await execFileAsync("git", ["fetch", "origin", branch], { cwd });
       } catch (fetchError) {
@@ -314,10 +343,10 @@ export class MergeQueue {
               rebased = true;
               logger.info("Rebased branch onto latest main before retry", { branch, taskId });
             }
-            await execFileAsync("git", ["checkout", this.mainBranch], { cwd });
+            await ensureCleanState(this.mainBranch, cwd);
             try { await execFileAsync("git", ["branch", "-D", localBranch], { cwd }); } catch { /* best effort */ }
           } catch {
-            try { await execFileAsync("git", ["checkout", this.mainBranch], { cwd }); } catch { /* best effort */ }
+            await ensureCleanState(this.mainBranch, cwd);
           }
 
           this.enqueue(branch, 1);
@@ -387,12 +416,7 @@ export class MergeQueue {
       span?.setStatus("error", msg);
       span?.end();
 
-      try {
-        await abortMerge(cwd);
-        await checkoutBranch(this.mainBranch, cwd);
-      } catch {
-        // Best effort
-      }
+      await ensureCleanState(this.mainBranch, cwd);
 
       return { success: false, status: "failed", branch, message: msg };
     } finally {

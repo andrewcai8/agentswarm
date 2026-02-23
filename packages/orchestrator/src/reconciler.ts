@@ -216,7 +216,7 @@ export class Reconciler {
     testSpan?.end();
 
     const conflictResult = await runCommand(
-      "grep", ["-rl", "<<<<<<<", "--include=*.ts", "--include=*.tsx", "--include=*.js", "--include=*.json", "."],
+      "git", ["grep", "-rl", "<<<<<<<", "--", "*.ts", "*.tsx", "*.js", "*.json"],
       this.targetRepoPath,
     );
     const conflictFiles = conflictResult.stdout.trim().split("\n").filter(Boolean);

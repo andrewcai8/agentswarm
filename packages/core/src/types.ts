@@ -119,5 +119,7 @@ export interface MetricsSnapshot {
   finalizationAttempts?: number;
   finalizationBuildPassed?: boolean;
   finalizationTestsPassed?: boolean;
+  finalizationAllMerged?: boolean;
+  finalizationUnmergedCount?: number;
   finalizationDurationMs?: number;
 }

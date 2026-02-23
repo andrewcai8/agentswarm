@@ -263,23 +263,18 @@ export async function rebaseBranch(branchName: string, onto: string, cwd?: strin
     const errMsg = error instanceof Error ? error.message : String(error);
     // Check for conflict markers in output
     const conflicted = errMsg.includes("fatal: could not apply") || errMsg.includes("CONFLICT");
-    if (conflicted) {
-      // Abort the rebase to leave repo in clean state
-      try {
-        await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
-      } catch {
-        // Ignore abort errors
-      }
-      return {
-        success: false,
-        conflicted: true,
-        message: "Rebase conflict occurred",
-      };
+    // Always abort any in-progress rebase to leave the repo in a clean state,
+    // regardless of whether the failure was a conflict or something else.
+    try {
+      await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
+    } catch {
+      // No rebase in progress or already aborted
     }
+
     return {
       success: false,
-      conflicted: false,
-      message: `Rebase failed: ${errMsg}`,
+      conflicted,
+      message: conflicted ? "Rebase conflict occurred" : `Rebase failed: ${errMsg}`,
     };
   }
 }

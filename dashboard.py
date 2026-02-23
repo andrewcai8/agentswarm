@@ -9,6 +9,7 @@ multi-panel dashboard at 4 Hz.
 Usage:
     python dashboard.py --demo                  # synthetic data (no orchestrator needed)
     python dashboard.py --demo --agents 100     # demo with 100 agent slots
+    python dashboard.py --follow                # tail latest logs/run-*.ndjson live (use with Poke)
     node packages/orchestrator/dist/main.js | python dashboard.py --stdin
     python dashboard.py                         # spawns orchestrator subprocess
 Controls:
@@ -512,6 +513,12 @@ class DashboardState:
             tree_snapshot["active_max_depth"] = max(active_depths) if active_depths else 0
             cap = max(1, tree_snapshot["active_max_depth"] + 1)
             self.visible_levels = max(1, min(self.visible_levels, cap))
+            total_tasks = (
+                self.active_workers
+                + self.pending_tasks
+                + self.completed_tasks
+                + self.failed_tasks
+            )
             return {
                 "elapsed": elapsed,
                 "active": self.active_workers,
@@ -524,7 +531,7 @@ class DashboardState:
                 "estimated_in_flight": self.estimated_in_flight,
                 "cost": self.total_tokens / 1000.0 * self.cost_rate,
                 "max_agents": self.max_agents,
-                "total_features": self.total_features,
+                "total_tasks": total_tasks,
                 "merge_merged": self.merge_merged,
                 "merge_conflicts": self.merge_conflicts,
                 "merge_failed": self.merge_failed,
@@ -635,20 +642,23 @@ def render_header(s: dict[str, Any]) -> Panel:
 
     elapsed = _elapsed_str(s["elapsed"])
     active = s["active"]
-    mx = s["max_agents"]
-    cph = s["cph"]
+    total = s["total_tasks"]
+    merged = s["merge_merged"]
 
     if s.get("planner_thinking"):
         thinking_sec = int(time.time() - s.get("planner_thinking_since", time.time()))
         dots = "●" * ((int(time.time() * 2) % 3) + 1)
         center = f"[bold bright_yellow]PLANNING {dots}[/] [dim]({thinking_sec}s)[/]"
     else:
-        center = f"[bold bright_white]{active}[/][dim]/{mx} agents[/]"
+        center = (
+            f"[bold bright_white]{active}[/] [dim]active[/]"
+            f"  [bold bright_white]{total}[/] [dim]total[/]"
+        )
 
     tbl.add_row(
         f"[bold bright_cyan]AGENTSWARM[/]  [dim]{elapsed}[/]",
         center,
-        f"[bold bright_green]{cph:,.0f}[/] [dim]commits/hr[/]",
+        f"[bold bright_green]{merged}[/] [dim]merged[/]",
     )
     return Panel(tbl, style="bright_cyan", height=3)
 
@@ -659,14 +669,14 @@ def render_metrics(s: dict[str, Any]) -> Panel:
     tbl.add_column("v", justify="right")
 
     done = s["completed"]
-    total = s["total_features"]
+    total = s["total_tasks"]
     pct = done / total * 100 if total else 0
     rate = s["merge_rate"]
     rate_color = "bright_green" if rate > 0.9 else "yellow" if rate > 0.7 else "bright_red"
 
     tbl.add_row("Iteration",   f"[bright_white]{s['iteration']}[/]")
     tbl.add_row("Commits/hr",  f"[bright_green]{s['cph']:,.0f}[/]")
-    tbl.add_row("Agents done",  f"[bright_green]{done}[/][dim]/{total}  {pct:.0f}%[/]")
+    tbl.add_row("Completed",   f"[bright_green]{done}[/][dim]/{total}  {pct:.0f}%[/]")
     tbl.add_row("Failed",      f"[bright_red]{s['failed']}[/]" if s['failed'] else "[dim]0[/]")
     tbl.add_row("Pending",     f"[yellow]{s['pending']}[/]" if s['pending'] else "[dim]0[/]")
     tbl.add_row("Merge rate",  f"[{rate_color}]{rate * 100:.1f}%[/]")
@@ -953,7 +963,7 @@ def render_activity(s: dict[str, Any]) -> Panel:
 
 def render_footer(s: dict[str, Any]) -> Panel:
     done = s["completed"]
-    total = s["total_features"]
+    total = s["total_tasks"]
     pct = done / total if total else 0
     bar_w = 50
     filled = int(pct * bar_w)
@@ -962,7 +972,7 @@ def render_footer(s: dict[str, Any]) -> Panel:
         + "[bright_black]" + "\u2591" * (bar_w - filled) + "[/]"
     )
     txt = Text.from_markup(
-        f"  [bold]FEATURES[/]  {bar}  [bright_white]{done}[/]"
+        f"  [bold]TASKS[/]  {bar}  [bright_white]{done}[/]"
         f"[dim]/{total}[/]  [bright_cyan]{pct * 100:.0f}%[/]"
     )
     return Panel(txt, style="bright_cyan", height=3)
@@ -1061,6 +1071,65 @@ def reader_replay(filepath: str, speed: float, q: queue.Queue[Any]):
                 time.sleep(wait)
             q.put(ev)
     finally:
+        q.put(None)
+
+
+def _find_latest_ndjson(logs_dir: str) -> str | None:
+    if not os.path.isdir(logs_dir):
+        return None
+    files = [f for f in os.listdir(logs_dir) if f.startswith("run-") and f.endswith(".ndjson")]
+    if not files:
+        return None
+    files.sort(
+        key=lambda f: os.path.getmtime(os.path.join(logs_dir, f)), reverse=True
+    )
+    return os.path.join(logs_dir, files[0])
+
+
+def reader_follow(logs_dir: str, q: queue.Queue[Any]):
+    """Tail the latest NDJSON log file live — like tail -f.
+
+    Waits for a log file to appear, reads existing content to catch up,
+    then polls for new lines.  Switches to a newer file if one appears
+    (new orchestrator run).
+    """
+    current_path: str | None = None
+    fh = None
+    check_counter = 0
+
+    try:
+        while True:
+            if check_counter % 8 == 0:
+                latest = _find_latest_ndjson(logs_dir)
+                if latest and latest != current_path:
+                    if fh:
+                        fh.close()
+                    current_path = latest
+                    fh = open(current_path)
+            check_counter += 1
+
+            if fh is None:
+                time.sleep(0.25)
+                continue
+
+            had_data = False
+            while True:
+                line = fh.readline()
+                if not line:
+                    break
+                line = line.strip()
+                if line:
+                    try:
+                        q.put(json.loads(line))
+                        had_data = True
+                    except json.JSONDecodeError:
+                        pass
+
+            if not had_data:
+                time.sleep(0.25)
+    finally:
+        if fh:
+            fh.close()
         q.put(None)
 
 
@@ -1375,6 +1444,8 @@ def main():
     ap.add_argument("--stdin", action="store_true", help="Read NDJSON from stdin")
     ap.add_argument("--replay", type=str, default=None, metavar="FILE",
                      help="Replay an NDJSON log file at original speed")
+    ap.add_argument("--follow", action="store_true",
+                     help="Tail the latest logs/run-*.ndjson file live (use alongside Poke)")
     ap.add_argument("--speed", type=float, default=1.0,
                      help="Replay speed multiplier (default 1.0, e.g. 10 = 10x faster)")
     ap.add_argument("--json-only", action="store_true", help="Output raw NDJSON to stdout (no TUI)")
@@ -1388,7 +1459,10 @@ def main():
     # If JSON-only, we don't need rich console or dashboard state
     if args.json_only:
         dq: queue.Queue[Any] = queue.Queue()
-        if args.demo:
+        if args.follow:
+            logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+            thr = threading.Thread(target=reader_follow, args=(logs_dir, dq), daemon=True)
+        elif args.demo:
             thr = threading.Thread(target=demo_generator,
                                    args=(dq, args.agents, args.features), daemon=True)
         elif args.stdin:
@@ -1408,8 +1482,10 @@ def main():
     state = DashboardState(args.agents, args.features, args.cost_rate)
     dq: queue.Queue[Any] = queue.Queue()
 
-    # start reader thread
-    if args.replay:
+    if args.follow:
+        logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+        thr = threading.Thread(target=reader_follow, args=(logs_dir, dq), daemon=True)
+    elif args.replay:
         thr = threading.Thread(target=reader_replay,
                                args=(args.replay, args.speed, dq), daemon=True)
     elif args.demo:
@@ -1524,7 +1600,7 @@ def main():
     console.print()
     console.print("[bold bright_cyan]AgentSwarm Session Complete[/]")
     console.print(f"  Duration    {timedelta(seconds=int(s['elapsed']))}")
-    console.print(f"  Completed   {s['completed']} / {s['total_features']}")
+    console.print(f"  Completed   {s['completed']} / {s['total_tasks']}")
     console.print(f"  Failed      {s['failed']}")
     console.print(f"  Merged      {s['merge_merged']}  "
                   f"conflicts {s['merge_conflicts']}  "

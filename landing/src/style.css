@@ -1,0 +1,189 @@
+/* =========================================================
+   Longshot — Warm Editorial Monograph
+   ========================================================= */
+
+:root {
+  /* Palette */
+  --bg-warm:      #FAF5EE;
+  --bg-dark:      #0a0a0f;
+  --ink:          #1a1a1a;
+  --muted:        #8B7355;
+  --muted-light:  rgba(255, 255, 255, 0.4);
+
+  /* Typography */
+  --font-display: "Instrument Serif", Georgia, serif;
+  --font-mono:    "JetBrains Mono", "Courier New", monospace;
+
+  /* Spacing */
+  --section-pad:  clamp(80px, 12vh, 160px);
+  --content-max:  1100px;
+
+  /* Transitions */
+  --ease-out:     cubic-bezier(0.25, 0.46, 0.45, 0.94);
+}
+
+/* ---- Reset ---- */
+*,
+*::before,
+*::after {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+html {
+  font-size: 16px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  scroll-behavior: smooth;
+}
+
+body {
+  background-color: var(--bg-warm);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 400;
+  line-height: 1.6;
+  overflow-x: hidden;
+}
+
+img,
+video {
+  display: block;
+  max-width: 100%;
+  height: auto;
+}
+
+/* =========================================================
+   Fade-up animation (scroll-triggered)
+   ========================================================= */
+
+.fade-up {
+  opacity: 0;
+  transform: translateY(32px);
+  transition:
+    opacity 0.8s var(--ease-out),
+    transform 0.8s var(--ease-out);
+}
+
+.fade-up.is-visible {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.fade-up:nth-child(2) {
+  transition-delay: 0.12s;
+}
+
+.fade-up:nth-child(3) {
+  transition-delay: 0.24s;
+}
+
+/* =========================================================
+   Section Labels
+   ========================================================= */
+
+.section-label {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: clamp(0.7rem, 0.8vw, 0.8rem);
+  font-weight: 400;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  margin-bottom: 1.5rem;
+}
+
+/* =========================================================
+   Section 1 — Hero (dark: title + video)
+   ========================================================= */
+
+.hero {
+  background-color: var(--bg-dark);
+  padding: clamp(5rem, 14vh, 12rem) 2rem clamp(4rem, 10vh, 10rem);
+}
+
+.hero__inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+  text-align: center;
+}
+
+.hero__headline {
+  font-family: var(--font-display);
+  font-style: italic;
+  font-weight: 400;
+  font-size: clamp(3.2rem, 8vw, 7.5rem);
+  line-height: 1.05;
+  letter-spacing: -0.02em;
+  color: #fff;
+  margin-bottom: 1rem;
+}
+
+.hero__sub {
+  font-family: var(--font-mono);
+  font-size: clamp(0.85rem, 1.2vw, 1.05rem);
+  font-weight: 300;
+  color: rgba(255, 255, 255, 0.85);
+  letter-spacing: 0.01em;
+  margin-bottom: clamp(3rem, 6vh, 5rem);
+}
+
+.hero__video-wrap {
+  width: 90%;
+  margin: 0 auto;
+  border-radius: 4px;
+  overflow: hidden;
+  background-color: #000;
+}
+
+.hero__video {
+  width: 100%;
+  display: block;
+}
+
+/* =========================================================
+   Section 2 — Architecture (warm)
+   ========================================================= */
+
+.arch {
+  background-color: var(--bg-warm);
+  padding: var(--section-pad) 2rem;
+  padding-bottom: calc(var(--section-pad) * 1.4);
+}
+
+.arch__inner {
+  max-width: var(--content-max);
+  margin: 0 auto;
+}
+
+.arch__block {
+  margin-bottom: clamp(60px, 10vh, 140px);
+}
+
+.arch__block:last-child {
+  margin-bottom: 0;
+}
+
+.arch .section-label {
+  color: var(--muted);
+}
+
+.arch__img {
+  width: 100%;
+  border-radius: 2px;
+}
+
+/* =========================================================
+   Responsive
+   ========================================================= */
+
+@media (max-width: 640px) {
+  .hero__video-wrap {
+    width: 100%;
+    border-radius: 2px;
+  }
+
+  .hero__headline {
+    letter-spacing: -0.01em;
+  }
+}

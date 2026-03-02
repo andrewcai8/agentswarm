@@ -406,7 +406,7 @@ export interface PiSessionResult {
 }
 
 function registerPiModel(llmConfig: LLMConfig) {
-  const authStorage = new AuthStorage();
+  const authStorage = Reflect.construct(AuthStorage, []) as AuthStorage;
   const modelRegistry = new ModelRegistry(authStorage);
 
   // Pi doesn't support multi-endpoint; take the first one.

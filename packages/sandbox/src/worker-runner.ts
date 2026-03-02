@@ -159,7 +159,7 @@ export async function runWorker(): Promise<void> {
     log("Worker instructions written to /workspace/AGENTS.md");
   }
 
-  const authStorage = new AuthStorage();
+  const authStorage = Reflect.construct(AuthStorage, []) as AuthStorage;
   const modelRegistry = new ModelRegistry(authStorage);
   modelRegistry.registerProvider("glm5", {
     baseUrl: llmConfig.endpoint,

@@ -33,13 +33,80 @@ User request
 
 **Modal** provides the cloud sandboxes. Each worker runs in a fully isolated container with its own clone of the target repository.
 
+## Moonshot Goals
+
+Longshot already runs parallel planning and execution across isolated workers. The moonshot is to evolve this into a **self-driving codebase loop** that can handle larger scopes over longer time horizons while keeping human review as the final gate.
+
+### Direction of travel
+
+- **Background agents**: long-lived agents that can keep working asynchronously and report back with reviewable artifacts.
+- **Long-running execution**: multi-hour task completion with explicit planning, progress memory, and follow-through.
+- **Issue-to-PR automation**: tighter pipelines from problem intake to draft PRs, with CI + human approval gates.
+- **Agent reliability**: better harness design for context rollover, retries, verification, and anti-fragile recovery.
+
+### Prior art and references
+
+#### User-provided references
+
+- [Why We Built Our Background Agent (Ramp)](https://builders.ramp.com/post/why-we-built-our-background-agent)
+- [Minions: Stripe’s one-shot, end-to-end coding agents](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents)
+- [Minions Part 2 (Stripe)](https://stripe.dev/blog/minions-stripes-one-shot-end-to-end-coding-agents-part-2)
+- [The Self-Driving Codebase — Background Agents and the Next Era of Enterprise Software Delivery](https://background-agents.com/)
+- [The third era of AI software development (Cursor)](https://cursor.com/blog/third-era)
+- [Towards self-driving codebases (Cursor)](https://cursor.com/blog/self-driving-codebases)
+- [Expanding our long-running agents research preview (Cursor)](https://cursor.com/blog/long-running-agents)
+
+#### Additional relevant references
+
+- [Effective harnesses for long-running agents (Anthropic Engineering)](https://www.anthropic.com/engineering/effective-harnesses-for-long-running-agents)
+- [GitHub Copilot: Meet the new coding agent](https://github.blog/news-insights/product-news/github-copilot-meet-the-new-coding-agent/)
+- [Building an agentic memory system for GitHub Copilot](https://github.blog/ai-and-ml/github-copilot/building-an-agentic-memory-system-for-github-copilot/)
+
 ## Prerequisites
+
+### End users (installed CLI)
+
+- Python 3.12+
+- Node.js 22+ (runtime engine for the orchestrator)
+
+### Development (this repository)
 
 - Node.js 22+
 - pnpm
 - Python 3.12+
 - [uv](https://docs.astral.sh/uv/)
 - [Modal](https://modal.com) account (`pip install modal && modal setup`)
+
+## Install (public CLI)
+
+### PyPI + pipx (recommended)
+
+```bash
+pipx install longshot
+longshot --version
+```
+
+### Homebrew tap
+
+```bash
+brew tap andrewcai8/longshot
+brew install longshot
+longshot --version
+```
+
+On first run, the CLI downloads a matching runtime bundle and installs Node runtime dependencies into a local cache (`~/.longshot/runtime/<version>` by default).
+
+Optional overrides:
+
+- `LONGSHOT_RUNTIME_URL`: explicit URL for the runtime tarball
+- `LONGSHOT_RELEASE_REPO`: GitHub repo slug for release downloads (default: `andrewcai8/longshot`)
+- `LONGSHOT_CACHE_DIR`: custom cache root for runtime assets
+
+## Release maintainers
+
+For one-time publishing setup (PyPI trusted publishing + Homebrew tap wiring) and first release steps, see:
+
+- [`docs/release-setup.md`](./docs/release-setup.md)
 
 ## Quick Start
 

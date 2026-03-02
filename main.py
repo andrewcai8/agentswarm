@@ -15,13 +15,17 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
+import tarfile
 import time
 from datetime import datetime
 from importlib.metadata import PackageNotFoundError, version
+from pathlib import Path
 from typing import Any
+from urllib.request import urlopen
 
 DIM = "\033[2m"
 RESET = "\033[0m"
@@ -59,6 +63,134 @@ DEFAULT_TRUNCATE_LIMIT = 200
 DEBUG_TRUNCATE_LIMIT = 2000
 
 debug_mode = False
+RUNTIME_REPO_DEFAULT = "andrewcai8/longshot"
+RUNTIME_ENV_VAR = "LONGSHOT_RUNTIME_URL"
+PROMPTS_ROOT_ENV_VAR = "LONGSHOT_PROMPTS_ROOT"
+
+
+def _runtime_cache_root() -> Path:
+    override = os.environ.get("LONGSHOT_CACHE_DIR")
+    if override:
+        return Path(override).expanduser()
+    return Path.home() / ".longshot" / "runtime"
+
+
+def _runtime_release_url(version_tag: str) -> str:
+    repo = os.environ.get("LONGSHOT_RELEASE_REPO", RUNTIME_REPO_DEFAULT)
+    return (
+        f"https://github.com/{repo}/releases/download/v{version_tag}/"
+        f"longshot-runtime-v{version_tag}.tar.gz"
+    )
+
+
+def _safe_extract_tar(archive_path: Path, target_dir: Path) -> None:
+    with tarfile.open(archive_path, "r:gz") as tar:
+        for member in tar.getmembers():
+            member_path = target_dir / member.name
+            if not member_path.resolve().is_relative_to(target_dir.resolve()):
+                raise RuntimeError(f"Unsafe path in runtime bundle: {member.name}")
+        tar.extractall(target_dir)
+
+
+def _find_runtime_root(search_root: Path) -> Path:
+    direct = search_root / "runtime"
+    if (direct / "packages" / "orchestrator" / "dist" / "main.js").exists():
+        return direct
+
+    for candidate in search_root.glob("**/*"):
+        if not candidate.is_dir():
+            continue
+        if (candidate / "packages" / "orchestrator" / "dist" / "main.js").exists():
+            return candidate
+
+    raise RuntimeError("Downloaded runtime bundle does not contain orchestrator entrypoint")
+
+
+def _write_runtime_package_json(runtime_root: Path) -> None:
+    package_json_path = runtime_root / "package.json"
+    if package_json_path.exists():
+        return
+
+    package_json = {
+        "name": "longshot-runtime",
+        "private": True,
+        "type": "module",
+        "dependencies": {
+            "@longshot/core": "file:./packages/core",
+            "@mariozechner/pi-coding-agent": "^0.52.0",
+            "dotenv": "^17.3.1",
+        },
+    }
+    package_json_path.write_text(f"{json.dumps(package_json, indent=2)}\n", encoding="utf-8")
+
+
+def _ensure_runtime_node_modules(runtime_root: Path) -> None:
+    required = [
+        runtime_root / "node_modules" / "@longshot" / "core" / "dist" / "index.js",
+        runtime_root / "node_modules" / "@mariozechner" / "pi-coding-agent",
+        runtime_root / "node_modules" / "dotenv",
+    ]
+    if all(path.exists() for path in required):
+        return
+
+    _write_runtime_package_json(runtime_root)
+    try:
+        subprocess.run(
+            ["npm", "install", "--omit=dev", "--no-audit", "--no-fund"],
+            cwd=runtime_root,
+            check=True,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("npm is required for longshot runtime bootstrap") from exc
+    except subprocess.CalledProcessError as exc:
+        raise RuntimeError(
+            f"Failed to install longshot runtime dependencies (exit {exc.returncode})"
+        ) from exc
+
+
+def resolve_runtime_root(package_root: Path) -> Path:
+    local_entry = package_root / "packages" / "orchestrator" / "dist" / "main.js"
+    local_prompts = package_root / "prompts"
+    if local_entry.exists() and local_prompts.exists():
+        return package_root
+
+    version_tag = get_cli_version()
+    cache_root = _runtime_cache_root()
+    runtime_root = cache_root / version_tag
+    runtime_entry = runtime_root / "packages" / "orchestrator" / "dist" / "main.js"
+    runtime_prompts = runtime_root / "prompts"
+
+    if not (runtime_entry.exists() and runtime_prompts.exists()):
+        cache_root.mkdir(parents=True, exist_ok=True)
+        runtime_root_tmp = cache_root / f"{version_tag}.tmp"
+        if runtime_root_tmp.exists():
+            shutil.rmtree(runtime_root_tmp)
+        runtime_root_tmp.mkdir(parents=True, exist_ok=True)
+
+        runtime_url = os.environ.get(RUNTIME_ENV_VAR) or _runtime_release_url(version_tag)
+        archive_path = runtime_root_tmp / "runtime.tar.gz"
+
+        try:
+            with urlopen(runtime_url, timeout=120) as resp:
+                archive_path.write_bytes(resp.read())
+        except Exception as exc:
+            raise RuntimeError(
+                "Unable to download longshot runtime bundle. "
+                f"Set {RUNTIME_ENV_VAR} to a reachable bundle URL or install from source."
+            ) from exc
+
+        extracted_dir = runtime_root_tmp / "extracted"
+        extracted_dir.mkdir(parents=True, exist_ok=True)
+        _safe_extract_tar(archive_path, extracted_dir)
+        unpacked_runtime_root = _find_runtime_root(extracted_dir)
+
+        if runtime_root.exists():
+            shutil.rmtree(runtime_root)
+        shutil.move(str(unpacked_runtime_root), str(runtime_root))
+        shutil.rmtree(runtime_root_tmp, ignore_errors=True)
+
+    _ensure_runtime_node_modules(runtime_root)
+    return runtime_root
 
 
 def format_ts(epoch_ms: int) -> str:
@@ -199,24 +331,29 @@ def run(
     global debug_mode
     debug_mode = debug
 
-    project_root = os.path.dirname(os.path.abspath(__file__))
-    node_cmd = ["node", "packages/orchestrator/dist/main.js", request]
+    package_root = Path(__file__).resolve().parent
+    runtime_root = resolve_runtime_root(package_root)
+    node_entry = runtime_root / "packages" / "orchestrator" / "dist" / "main.js"
+    working_dir = Path.cwd()
+    node_cmd = ["node", str(node_entry), request]
 
     env = os.environ.copy()
+    env[PROMPTS_ROOT_ENV_VAR] = str(runtime_root)
     if debug:
         env["LOG_LEVEL"] = "debug"
 
     print(f"{BOLD}{CYAN}▶ Longshot{RESET}")
     print(f"  {DIM}Request:{RESET} {request[:120]}")
-    print(f"  {DIM}CWD:{RESET}     {project_root}")
+    print(f"  {DIM}CWD:{RESET}     {working_dir}")
+    print(f"  {DIM}Runtime:{RESET} {runtime_root}")
     if debug:
         print(f"  {DIM}Debug:{RESET}   {YELLOW}enabled{RESET} (LOG_LEVEL=debug)")
     print()
 
     if reset:
-        reset_script = os.path.join(project_root, "scripts", "reset-target.sh")
+        reset_script = runtime_root / "scripts" / "reset-target.sh"
         print(f"{YELLOW}⟳ Resetting target repo…{RESET}")
-        result = subprocess.run(["bash", reset_script], cwd=project_root)
+        result = subprocess.run(["bash", str(reset_script)], cwd=working_dir)
         if result.returncode != 0:
             print(f"{RED}✗ Reset failed (exit code {result.returncode}){RESET}")
             return result.returncode
@@ -227,7 +364,7 @@ def run(
         node_cmd,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        cwd=project_root,
+        cwd=working_dir,
         env=env,
     )
     if proc.stdout is None:
@@ -236,9 +373,9 @@ def run(
     dashboard_proc: subprocess.Popen[bytes] | None = None
     if with_dashboard:
         dashboard_proc = subprocess.Popen(
-            [sys.executable, os.path.join(project_root, "dashboard.py"), "--stdin"],
+            [sys.executable, str(package_root / "dashboard.py"), "--stdin"],
             stdin=subprocess.PIPE,
-            cwd=project_root,
+            cwd=working_dir,
         )
 
     last_metrics: dict[str, Any] | None = None

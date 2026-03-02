@@ -108,6 +108,8 @@ For one-time publishing setup (PyPI trusted publishing + Homebrew tap wiring) an
 
 - [`docs/release-setup.md`](./docs/release-setup.md)
 
+Publishing is intentionally disabled by default via repository variable `ENABLE_PUBLIC_RELEASE=false`.
+
 ## Quick Start
 
 ```bash

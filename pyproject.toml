@@ -8,16 +8,32 @@ version = "0.1.0"
 description = "Massively parallel autonomous coding agent orchestrator"
 readme = "README.md"
 requires-python = ">=3.12"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Longshot Maintainers" }]
+keywords = ["cli", "orchestrator", "agents", "automation", "llm"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Build Tools",
+]
 dependencies = [
     "rich>=14.3.2",
 ]
+
+[project.urls]
+Homepage = "https://github.com/andrewcai8/longshot"
+Repository = "https://github.com/andrewcai8/longshot"
+Issues = "https://github.com/andrewcai8/longshot/issues"
 
 [project.scripts]
 longshot = "main:main"
 
 [tool.setuptools]
 py-modules = ["main", "dashboard"]
-include-package-data = true
 
 
 [tool.ruff]

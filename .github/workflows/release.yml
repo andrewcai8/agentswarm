@@ -1,0 +1,214 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  build-assets:
+    name: Build release assets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    if: github.event_name == 'workflow_dispatch' || vars.ENABLE_PUBLIC_RELEASE == 'true'
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Determine release version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          else
+            VERSION="$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")"
+          fi
+          echo "value=${VERSION}" >> "${GITHUB_OUTPUT}"
+
+      - name: Verify tag matches pyproject version
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          PYPROJECT_VERSION="$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text(encoding='utf-8'))['project']['version'])")"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          if [[ "${PYPROJECT_VERSION}" != "${TAG_VERSION}" ]]; then
+            echo "Tag version ${TAG_VERSION} does not match pyproject version ${PYPROJECT_VERSION}" >&2
+            exit 1
+          fi
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build TypeScript packages
+        run: pnpm build
+
+      - name: Typecheck
+        run: pnpm typecheck
+
+      - name: Lint TypeScript
+        run: pnpm lint
+
+      - name: Test
+        run: pnpm test
+
+      - name: Lint Python
+        run: |
+          pip install ruff
+          ruff check .
+
+      - name: Build Python artifacts
+        run: |
+          pip install build
+          python -m build --outdir dist/python
+
+      - name: Build runtime bundle
+        run: ./scripts/create-runtime-bundle.sh "${{ steps.version.outputs.value }}" "dist/runtime/longshot-runtime-v${{ steps.version.outputs.value }}.tar.gz"
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          find dist -type f \( -name "*.whl" -o -name "*.tar.gz" \) | sort | xargs sha256sum > dist/SHA256SUMS
+
+      - name: Upload release artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-assets
+          path: |
+            dist/python/*
+            dist/runtime/*
+            dist/SHA256SUMS
+
+  publish-github-release:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: [build-assets]
+    if: github.ref_type == 'tag' && vars.ENABLE_PUBLIC_RELEASE == 'true'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Create or update GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+
+  publish-pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build-assets]
+    if: github.ref_type == 'tag' && vars.ENABLE_PUBLIC_RELEASE == 'true'
+    permissions:
+      id-token: write
+
+    steps:
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Publish package distributions to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/python
+
+  update-homebrew-formula:
+    name: Update Homebrew formula artifact
+    runs-on: ubuntu-latest
+    needs: [build-assets]
+    if: vars.ENABLE_PUBLIC_RELEASE == 'true'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Download release assets
+        uses: actions/download-artifact@v4
+        with:
+          name: release-assets
+          path: dist
+
+      - name: Setup Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Generate Homebrew formula
+        shell: bash
+        run: |
+          VERSION="${{ needs.build-assets.outputs.version }}"
+          SDIST="dist/python/longshot-${VERSION}.tar.gz"
+          SHA256="$(sha256sum "${SDIST}" | awk '{print $1}')"
+          python scripts/generate-homebrew-formula.py \
+            --version "${VERSION}" \
+            --sha256 "${SHA256}" \
+            --repo "${{ github.repository }}"
+
+      - name: Upload Homebrew formula artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: homebrew-formula
+          path: packaging/homebrew/longshot.rb
+
+  publish-homebrew-tap:
+    name: Publish Homebrew formula to tap
+    runs-on: ubuntu-latest
+    needs: [update-homebrew-formula]
+    if: github.ref_type == 'tag' && vars.ENABLE_PUBLIC_RELEASE == 'true' && vars.HOMEBREW_TAP_REPO != '' && secrets.HOMEBREW_TAP_TOKEN != ''
+    permissions:
+      contents: read
+
+    steps:
+      - name: Download Homebrew formula artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: homebrew-formula
+          path: formula
+
+      - name: Push formula to tap repository
+        shell: bash
+        env:
+          HOMEBREW_TAP_REPO: ${{ vars.HOMEBREW_TAP_REPO }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          TAP_DIR="/tmp/homebrew-tap"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/${HOMEBREW_TAP_REPO}.git" "${TAP_DIR}"
+          mkdir -p "${TAP_DIR}/Formula"
+          cp "formula/longshot.rb" "${TAP_DIR}/Formula/longshot.rb"
+
+          cd "${TAP_DIR}"
+          if git diff --quiet -- Formula/longshot.rb; then
+            echo "No Homebrew formula changes detected"
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Formula/longshot.rb
+          git commit -m "chore: update longshot formula for ${GITHUB_REF_NAME}"
+          git push origin HEAD

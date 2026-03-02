@@ -34,6 +34,12 @@ function formatDuration(ms: number): string {
 }
 
 async function main(): Promise<void> {
+  const promptsRootOverride = process.env.LONGSHOT_PROMPTS_ROOT?.trim();
+  const promptsProjectRoot =
+    promptsRootOverride && promptsRootOverride.length > 0
+      ? resolve(promptsRootOverride)
+      : process.cwd();
+
   const logFile = enableFileLogging(process.cwd());
   const { traceFile, llmDetailFile } = enableTracing(process.cwd());
 
@@ -41,6 +47,7 @@ async function main(): Promise<void> {
   logger.info("Log level", { stdout: getLogLevel(), file: "debug" });
 
   const orchestrator = await createOrchestrator({
+    projectRoot: promptsProjectRoot,
     callbacks: {
       onTaskCreated(task) {
         logger.info("Task created", {

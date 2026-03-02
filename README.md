@@ -31,7 +31,7 @@ User request
 
 **Python layer** (`main.py`, `dashboard.py`) wraps the Node orchestrator with a human-readable CLI and optional Rich TUI dashboard.
 
-**Modal** provides the cloud sandboxes. Each worker runs in a fully isolated container with its own clone of the target repository.
+**Modal** currently provides the cloud sandboxes. Each worker runs in a fully isolated container with its own clone of the target repository.
 
 ## Moonshot Goals
 
@@ -43,6 +43,13 @@ Longshot already runs parallel planning and execution across isolated workers. T
 - **Long-running execution**: multi-hour task completion with explicit planning, progress memory, and follow-through.
 - **Issue-to-PR automation**: tighter pipelines from problem intake to draft PRs, with CI + human approval gates.
 - **Agent reliability**: better harness design for context rollover, retries, verification, and anti-fragile recovery.
+
+### Planned platform abstractions (future)
+
+- **Pluggable sandbox providers**: keep Modal as the current default, while adding adapter-based support for alternatives like **E2B** (and other compatible runtimes).
+- **Pluggable agent harnesses**: expand beyond the current Pi harness to support multiple coding agents (for example **OpenCode**, **Claude Code**, and other compatible harnesses).
+- **Configuration-first selection**: make sandbox + harness provider choice a deploy-time config concern instead of a code fork, so open-source contributors can swap backends safely.
+- **Capability-aware routing**: normalize provider capabilities (filesystem, shell, network, session longevity, snapshots) and route tasks to the best compatible backend.
 
 ### Prior art and references
 

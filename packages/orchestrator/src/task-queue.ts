@@ -1,4 +1,4 @@
-import type { Task, TaskStatus } from "@agentswarm/core";
+import type { Task, TaskStatus } from "@longshot/core";
 
 /**
  * Valid state transitions for tasks

@@ -1,12 +1,13 @@
 import { execSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import { readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
-import type { Task, Handoff } from "@agentswarm/core";
+import type { Task, Handoff } from "@longshot/core";
 import {
   enableTracing,
   closeTracing,
   Tracer,
   type Span,
-} from "@agentswarm/core";
+} from "@longshot/core";
 import {
   AuthStorage,
   createAgentSession,
@@ -375,35 +376,37 @@ function readTaskIdSafe(): string {
   }
 }
 
-runWorker().catch((err: unknown) => {
-  const errorMessage = err instanceof Error ? err.message : String(err);
-  const errorStack = err instanceof Error ? err.stack : undefined;
-  log(`FATAL: ${errorMessage}`);
-  if (errorStack) {
-    log(errorStack);
-  }
-  closeTracing();
+if (process.argv[1] === fileURLToPath(import.meta.url)) {
+  runWorker().catch((err: unknown) => {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    log(`FATAL: ${errorMessage}`);
+    if (errorStack) {
+      log(errorStack);
+    }
+    closeTracing();
 
-  const taskId = readTaskIdSafe();
-  const failureHandoff: Handoff = {
-    taskId,
-    status: "failed",
-    summary: `Worker crashed: ${errorMessage}`,
-    diff: "",
-    filesChanged: [],
-    concerns: [errorMessage],
-    suggestions: ["Check worker logs for stack trace"],
-    metrics: {
-      linesAdded: 0,
-      linesRemoved: 0,
-      filesCreated: 0,
-      filesModified: 0,
-      tokensUsed: 0,
-      toolCallCount: 0,
-      durationMs: 0,
-    },
-  };
+    const taskId = readTaskIdSafe();
+    const failureHandoff: Handoff = {
+      taskId,
+      status: "failed",
+      summary: `Worker crashed: ${errorMessage}`,
+      diff: "",
+      filesChanged: [],
+      concerns: [errorMessage],
+      suggestions: ["Check worker logs for stack trace"],
+      metrics: {
+        linesAdded: 0,
+        linesRemoved: 0,
+        filesCreated: 0,
+        filesModified: 0,
+        tokensUsed: 0,
+        toolCallCount: 0,
+        durationMs: 0,
+      },
+    };
 
-  writeResult(failureHandoff);
-  process.exit(1);
-});
+    writeResult(failureHandoff);
+    process.exit(1);
+  });
+}

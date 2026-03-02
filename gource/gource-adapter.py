@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Gource Adapter for AgentSwarm
+Gource Adapter for Longshot
 ==============================
-Reads AgentSwarm NDJSON events from stdin and outputs Gource Custom Log Format.
+Reads Longshot NDJSON events from stdin and outputs Gource Custom Log Format.
 
 Gource format:  timestamp|username|type|file|colour
 
@@ -387,7 +387,7 @@ def run_demo(max_agents: int, total_features: int, save_path: str | None):
 # ── Main ─────────────────────────────────────────────────────────────────────
 
 def main():
-    ap = argparse.ArgumentParser(description="AgentSwarm → Gource adapter")
+    ap = argparse.ArgumentParser(description="Longshot → Gource adapter")
     ap.add_argument("--sse", action="store_true",
                     help="Read SSE (text/event-stream) from stdin instead of raw NDJSON")
     ap.add_argument("--demo", action="store_true",

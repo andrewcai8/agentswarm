@@ -9,3 +9,4 @@ export * from "./planner.js";
 export * from "./subplanner.js";
 export * from "./reconciler.js";
 export * from "./orchestrator.js";
+export * from "./scope-tracker.js";

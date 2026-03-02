@@ -1,4 +1,4 @@
-import { createLogger, type LLMEndpoint, type Span, writeLLMDetail } from "@agentswarm/core";
+import { createLogger, type LLMEndpoint, type Span, writeLLMDetail } from "@longshot/core";
 
 const logger = createLogger("llm-client", "root-planner");
 
@@ -19,8 +19,6 @@ export interface LLMResponse {
   latencyMs: number;
 }
 
-/** @deprecated Use LLMEndpoint from @agentswarm/core directly */
-export type LLMEndpointConfig = LLMEndpoint;
 
 export interface LLMClientConfig {
   endpoints: LLMEndpoint[];

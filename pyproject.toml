@@ -1,9 +1,9 @@
 [project]
-name = "agentswarm"
+name = "longshot"
 version = "0.1.0"
-description = "Add your description here"
+description = "Massively parallel autonomous coding agent orchestrator"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.12"
 dependencies = [
     "rich>=14.3.2",
 ]

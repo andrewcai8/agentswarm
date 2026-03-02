@@ -1,6 +1,6 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Task, Handoff } from "@agentswarm/core";
+import type { Task, Handoff } from "@longshot/core";
 import { shouldDecompose, DEFAULT_SUBPLANNER_CONFIG, aggregateHandoffs, createFailureHandoff } from "../subplanner.js";
 import type { SubplannerConfig } from "../subplanner.js";
 import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";

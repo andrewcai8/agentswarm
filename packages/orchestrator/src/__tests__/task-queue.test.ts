@@ -1,7 +1,7 @@
 import { describe, it } from "node:test";
 import assert from "node:assert/strict";
 import { PriorityQueue, TaskQueue } from "../task-queue.js";
-import type { Task, TaskStatus } from "@agentswarm/core";
+import type { Task, TaskStatus } from "@longshot/core";
 
 /**
  * Helper function to create test tasks

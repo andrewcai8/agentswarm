@@ -1,12 +1,12 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { HarnessConfig, Tracer, Span } from "@agentswarm/core";
+import type { HarnessConfig, Tracer, Span } from "@longshot/core";
 import {
   checkoutBranch,
   mergeBranch as coreMergeBranch,
   rebaseBranch,
   createLogger,
-} from "@agentswarm/core";
+} from "@longshot/core";
 import type { GitMutex } from "./shared.js";
 
 const execFileAsync = promisify(execFile);

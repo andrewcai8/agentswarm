@@ -1,5 +1,5 @@
 #!/bin/bash
-# run-gource.sh — Launch Gource visualization for AgentSwarm
+# run-gource.sh — Launch Gource visualization for Longshot
 #
 # Usage:
 #   ./run-gource.sh --demo                     # synthetic demo (no orchestrator)
@@ -42,7 +42,7 @@ ARGS=(
     --log-format custom
     -1280x720
     --windowed
-    --title "AgentSwarm"
+    --title "Longshot"
     --background-colour 0D0D12
     --font-colour 888888
     --seconds-per-day 10.0

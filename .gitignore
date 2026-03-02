@@ -22,3 +22,11 @@ gource.zip
 gource-bin
 
 agent-swarm-visualizer
+
+# Build artifacts & logs
+*.ndjson
+*.mp4
+gource/terminal-logs/
+gource/video/
+marketing/
+demo/

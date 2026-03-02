@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AgentSwarm Dashboard -- Rich Terminal UI
+Longshot Dashboard -- Rich Terminal UI
 =========================================
 Real-time monitoring for the massively parallel autonomous coding system.
 Reads NDJSON from the TypeScript orchestrator and renders a fullscreen
@@ -656,7 +656,7 @@ def render_header(s: dict[str, Any]) -> Panel:
         )
 
     tbl.add_row(
-        f"[bold bright_cyan]AGENTSWARM[/]  [dim]{elapsed}[/]",
+        f"[bold bright_cyan]LONGSHOT[/]  [dim]{elapsed}[/]",
         center,
         f"[bold bright_green]{merged}[/] [dim]merged[/]",
     )
@@ -1439,7 +1439,7 @@ def print_json_loop(q: queue.Queue[Any]):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="AgentSwarm Rich Terminal Dashboard")
+    ap = argparse.ArgumentParser(description="Longshot Rich Terminal Dashboard")
     ap.add_argument("--demo", action="store_true", help="Synthetic data mode")
     ap.add_argument("--stdin", action="store_true", help="Read NDJSON from stdin")
     ap.add_argument("--replay", type=str, default=None, metavar="FILE",
@@ -1598,7 +1598,7 @@ def main():
     # final summary
     s = state.snap()
     console.print()
-    console.print("[bold bright_cyan]AgentSwarm Session Complete[/]")
+    console.print("[bold bright_cyan]Longshot Session Complete[/]")
     console.print(f"  Duration    {timedelta(seconds=int(s['elapsed']))}")
     console.print(f"  Completed   {s['completed']} / {s['total_tasks']}")
     console.print(f"  Failed      {s['failed']}")

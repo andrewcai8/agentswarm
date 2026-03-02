@@ -52,7 +52,7 @@ MINUTES = 60  # seconds
 
 REGION = "us"
 PROXY_REGIONS = ["us-east"]
-MIN_CONTAINERS = 2  # keep warm — 16+ min cold start makes scale-to-zero impractical
+MIN_CONTAINERS = 0  # scale-to-zero by default; set to 1+ to avoid 16+ min cold start
 TARGET_INPUTS = 10
 
 # =============================================================================

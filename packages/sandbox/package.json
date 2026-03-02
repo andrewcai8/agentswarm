@@ -1,7 +1,7 @@
 {
-  "name": "@agentswarm/sandbox",
+  "name": "@longshot/sandbox",
   "version": "0.1.0",
-  "description": "Sandbox environment for agentswarm",
+  "description": "Sandbox environment for Longshot",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -12,7 +12,7 @@
     }
   },
   "dependencies": {
-    "@agentswarm/core": "workspace:*",
+    "@longshot/core": "workspace:*",
     "@mariozechner/pi-coding-agent": "^0.52.0"
   },
   "devDependencies": {

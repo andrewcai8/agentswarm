@@ -2,7 +2,7 @@ import { readFile } from "node:fs/promises";
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLogger, getRecentCommits, getFileTree } from "@agentswarm/core";
+import { createLogger, getRecentCommits, getFileTree } from "@longshot/core";
 import { spawn } from "node:child_process";
 import {
   AuthStorage,
@@ -386,7 +386,7 @@ function registerPiModel(llmConfig: LLMConfig) {
   // Pi doesn't support multi-endpoint; take the first one.
   const endpoint = llmConfig.endpoints[0];
 
-  modelRegistry.registerProvider("agentswarm", {
+  modelRegistry.registerProvider("longshot", {
     baseUrl: endpoint.endpoint + "/v1",
     apiKey: endpoint.apiKey || "no-key-needed",
     api: "openai-completions",
@@ -405,7 +405,7 @@ function registerPiModel(llmConfig: LLMConfig) {
     }],
   });
 
-  const model = modelRegistry.find("agentswarm", llmConfig.model);
+  const model = modelRegistry.find("longshot", llmConfig.model);
   if (!model) {
     throw new Error(`Model "${llmConfig.model}" not found in registry after registration`);
   }
@@ -416,7 +416,7 @@ function registerPiModel(llmConfig: LLMConfig) {
 export async function createPlannerPiSession(options: PiSessionOptions): Promise<PiSessionResult> {
   const { systemPrompt, targetRepoPath, llmConfig } = options;
 
-  const tempDir = mkdtempSync(join(tmpdir(), "agentswarm-planner-"));
+  const tempDir = mkdtempSync(join(tmpdir(), "longshot-planner-"));
   logger.debug("Creating Pi session", {
     tempDir,
     modelName: llmConfig.model,
@@ -450,4 +450,11 @@ export function cleanupPiSession(session: AgentSession, tempDir: string): void {
   } catch {
     // best-effort cleanup
   }
+}
+
+export const MAX_HANDOFF_SUMMARY_CHARS = 300;
+export const MAX_FILES_PER_HANDOFF = 30;
+
+export function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }

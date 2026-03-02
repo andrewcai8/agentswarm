@@ -34,7 +34,7 @@ from infra.sandbox_image import create_worker_image
 # ---------------------------------------------------------------------------
 # Module-level Modal resources
 # ---------------------------------------------------------------------------
-app = modal.App.lookup("agentswarm", create_if_missing=True)
+app = modal.App.lookup("longshot", create_if_missing=True)
 image = create_worker_image()
 
 

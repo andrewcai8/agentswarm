@@ -14,8 +14,8 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Task, Handoff, HarnessConfig, Tracer, Span } from "@agentswarm/core";
-import { createLogger } from "@agentswarm/core";
+import type { Task, Handoff, HarnessConfig, Tracer, Span } from "@longshot/core";
+import { createLogger } from "@longshot/core";
 
 const logger = createLogger("worker-pool", "root-planner");
 

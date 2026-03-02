@@ -1,12 +1,12 @@
-import type { Task, Handoff, Tracer, Span } from "@agentswarm/core";
-import { createLogger } from "@agentswarm/core";
+import type { Task, Handoff, Tracer, Span } from "@longshot/core";
+import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch } from "./shared.js";
+import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch, sleep, MAX_HANDOFF_SUMMARY_CHARS, MAX_FILES_PER_HANDOFF } from "./shared.js";
 
 const logger = createLogger("subplanner", "subplanner");
 
@@ -16,12 +16,6 @@ const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 30_000;
 const MAX_CONSECUTIVE_ERRORS = 5;
 const MAX_SUBPLANNER_ITERATIONS = 20;
-const MAX_HANDOFF_SUMMARY_CHARS = 300;
-const MAX_FILES_PER_HANDOFF = 30;
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
 
 function collectCompletedHandoffs(
   pending: { subtask: Task; handoff: Handoff }[],

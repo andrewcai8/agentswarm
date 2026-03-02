@@ -8,7 +8,7 @@ Each sandbox gets a copy of this image with:
 - Git (for version control)
 - Python 3.12 (for scripting)
 - Common dev tools (curl, wget, ripgrep, jq, tree)
-- The @agentswarm/sandbox package (the agent itself)
+- The @longshot/sandbox package (the agent itself)
 - Pi coding agent SDK (@mariozechner/pi-coding-agent)
 
 Usage:
@@ -17,10 +17,11 @@ Usage:
     sandbox = modal.Sandbox.create(image=image, ...)
 """
 
+import os
 import modal
 from pathlib import Path
 
-# Root of the agentswarm repo
+# Root of the longshot repo
 REPO_ROOT = Path(__file__).parent.parent
 
 
@@ -33,7 +34,7 @@ def create_agent_image() -> modal.Image:
     - Node.js 22.x LTS via NodeSource
     - Git, curl, wget, ripgrep, jq, tree, build-essential
     - pnpm package manager
-    - The compiled @agentswarm/sandbox package
+    - The compiled @longshot/sandbox package
     
     Returns:
         modal.Image: Ready-to-use image for Sandbox.create()
@@ -70,9 +71,9 @@ def create_agent_image() -> modal.Image:
             "pnpm --version",
         )
         # Git configuration for agent commits
-        .run_commands(
-            'git config --global user.name "andrewcai8"',
-            'git config --global user.email "andrewca78@gmail.com"',
+.run_commands(
+            f'git config --global user.name "{os.environ.get("GIT_COMMIT_NAME", "Longshot Bot")}"',
+            f'git config --global user.email "{os.environ.get("GIT_COMMIT_EMAIL", "agent@longshot.bot")}"',
             'git config --global init.defaultBranch main',
         )
         # Set working directory
@@ -90,7 +91,7 @@ def create_agent_image() -> modal.Image:
 
 def create_worker_image() -> modal.Image:
     """
-    Extended image that includes the pre-built @agentswarm/sandbox package
+    Extended image that includes the pre-built @longshot/sandbox package
     and the Pi coding agent SDK.
     
     Call this after packages/sandbox has been built locally.
@@ -113,11 +114,11 @@ def create_worker_image() -> modal.Image:
         .add_local_file(str(sandbox_pkg), "/agent/packages/sandbox/package.json", copy=True)
         # Install Pi coding agent SDK globally
         .run_commands("npm install -g @mariozechner/pi-coding-agent@0.52.12")
-        # Link @agentswarm/core so sandbox can resolve it
+        # Link @longshot/core so sandbox can resolve it
         # (both packages are pre-built JS with zero runtime deps — no npm install needed)
-        .run_commands(
-            "mkdir -p /agent/node_modules/@agentswarm",
-            "ln -s /agent/packages/core /agent/node_modules/@agentswarm/core",
+.run_commands(
+            "mkdir -p /agent/node_modules/@longshot",
+            "ln -s /agent/packages/core /agent/node_modules/@longshot/core",
             # Link Pi SDK so worker-runner.js can resolve it
             "ln -s $(npm root -g)/@mariozechner /agent/node_modules/@mariozechner",
             "ln -s /agent/packages/sandbox/dist/worker-runner.js /agent/worker-runner.js",

@@ -1,15 +1,14 @@
 {
-  "name": "@agentswarm/core",
+  "name": "@longshot/core",
   "version": "0.1.0",
-  "description": "Core types and utilities for agentswarm",
+  "description": "Core types and utilities for Longshot",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js",
-      "require": "./dist/index.js"
+      "import": "./dist/index.js"
     }
   },
   "scripts": {

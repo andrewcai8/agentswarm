@@ -1,72 +1,148 @@
-# AgentSwarm
+# Longshot
 
-## Inspiration
-
-We wanted to challenge the limits of autonomous coding. Traditional agent architectures are linear—one agent, one task, one commit. This is slow. We asked: **What if we could have 100 agents working in parallel?** Could we compress a week's worth of development into a single hour? AgentSwarm is our attempt to build a massively parallel autonomous coding system that can swarm a codebase, implementing hundreds of features concurrently.
+Massively parallel autonomous coding: decompose any project into hundreds of tasks and execute them simultaneously in isolated cloud sandboxes.
 
 ## What it does
 
-AgentSwarm is a **concurrent orchestrator** that manages a fleet of ephemeral coding agents. It:
+Longshot takes a natural-language build request and turns it into working code. A root planner breaks the request into granular tasks, dispatches them to ephemeral Modal sandboxes running in parallel, and merges the results back into your repository. A reconciler monitors build health throughout and automatically spawns fix tasks when something breaks.
 
-1. **Decomposes** a project into hundreds of granular tasks using an LLM Planner.
-2. **Dispatches** these tasks to ephemeral, sandboxed environments running on **Modal**.
-3. **Executes** code generation, testing, and Git operations in parallel.
-4. **Merges** the results back into the main branch using a robust merge queue that handles conflicts.
-5. **Heals** itself: A "Reconciler" agent monitors the build health and automatically dispatches fix tasks for broken builds or failing tests.
-6. **Visualizes** the entire process in real-time with a rich terminal dashboard.
+The entire system is stateless. Workers are ephemeral, state lives only in Git, and the orchestrator runs locally while all execution happens in the cloud.
 
-## Challenges we ran into
+## Architecture
 
-- **Concurrency Hell**: Coordinating 100 agents hitting the same Git repo simultaneously is hard. We had to implement a custom merge queue with optimistic locking and conflict detection.
-- **Context Management**: Providing enough context to agents without blowing up token costs required a smart file-tree-based retrieval system.
-- **Ephemeral State**: Managing state across hundreds of short-lived containers required a strict JSON handoff protocol to pass results and diffs between the orchestrator and the sandboxes.
+```
+User request
+    └── Root Planner (LLM)
+            └── Subplanners (for large task scopes)
+                    └── Workers (parallel, up to MAX_WORKERS)
+                            └── Modal Sandboxes
+                                    └── Pi Coding Agent (@mariozechner/pi-coding-agent)
+                                            └── Merge Queue
+                                                    └── Reconciler (self-healing)
+```
 
-## Accomplishments that we're proud of
+**Three TypeScript packages** (scope `@longshot/*`):
 
-- **The Reconciler**: Our self-healing mechanism that automatically detects when a commit breaks the build and spawns a high-priority "fix" task to resolve it.
-- **The Dashboard**: A beautiful, high-frequency terminal UI (built with `rich`) that gives us a god-mode view of the swarm's activity, costs, and throughput.
-- **Zero-State Architecture**: The entire system is stateless. Workers are ephemeral, and state is persisted only in Git. This makes the system incredibly resilient to failure.
+- `packages/core` — shared types, logging, LLM client, git utilities
+- `packages/orchestrator` — planner loop, worker pool, merge queue, reconciler
+- `packages/sandbox` — Modal sandbox definition and worker harness
+- `packages/mcp-server` — MCP server for controlling Longshot from AI assistants
 
-## What we learned
+**Python layer** (`main.py`, `dashboard.py`) wraps the Node orchestrator with a human-readable CLI and optional Rich TUI dashboard.
 
-- **Quantity has a Quality all its own**: Even if individual agents have a customized failure rate, a swarm can make massive progress if the validation and orchestration layer is robust.
-- **Specs are King**: The quality of the output is heavily dependent on the quality of the initial specification (`SPEC.md` and `FEATURES.json`).
-- **Infra is Hard**: 80% of the work was building the harness (git ops, sandboxing, queuing), not prompting the LLM.
+**Modal** provides the cloud sandboxes. Each worker runs in a fully isolated container with its own clone of the target repository.
 
-## What's next for AgentSwarm
+## Prerequisites
 
-- **Intelligent Conflict Resolution**: Spawning "Mediator" agents to manually resolve complex Git merge conflicts.
-- **Hierarchical Management**: Introducing "Manager" agents that can break down features dynamically, rather than relying on a static initial plan.
-- **Web Dashboard**: Porting our terminal UI to a React-based web app for remote monitoring.
+- Node.js 22+
+- pnpm
+- Python 3.12+
+- [uv](https://docs.astral.sh/uv/)
+- [Modal](https://modal.com) account (`pip install modal && modal setup`)
 
-## Stagehand Merge Recording
+## Quick Start
 
-You can run Stagehand recording manually or automatically after merges.
+```bash
+# Install dependencies
+pnpm install
+pnpm build
 
-1. Set environment variables:
-   - `MODEL_API_KEY` (or `OPENAI_API_KEY`)
-   - `BROWSERBASE_API_KEY`
-   - `BROWSERBASE_PROJECT_ID`
-   - Optional: `STAGEHAND_RECORD_URL` (default `http://127.0.0.1:5173`)
-   - Optional: `STAGEHAND_ENV=LOCAL` to run against a local browser instead of Browserbase
-   - Note: In `BROWSERBASE` mode, `STAGEHAND_RECORD_URL` must be publicly reachable (not `localhost`).
-   - Optional (LOCAL mode): `STAGEHAND_LOCAL_BROWSER_PATH` to force a browser executable path.
-   - Optional (LOCAL mode, macOS): `STAGEHAND_LOCAL_BROWSER=arc` or `STAGEHAND_LOCAL_BROWSER=brave`.
-2. Run a manual recording:
-   - `pnpm stagehand:record`
-3. Install git hooks to run recording after merges/rebases:
-   - `pnpm stagehand:hooks:install`
-   - Optional: set `STAGEHAND_POST_MERGE_ENABLED=0` to disable auto-run temporarily
+# Install Python dependencies
+uv sync
 
-Outputs are written to `stagehand-runs/run-*/` with:
-- `metadata.json` (session URLs and run details)
-- `final.png` (end-of-run screenshot)
+# Configure environment
+cp .env.example .env
+# Edit .env with your LLM credentials and target repo
 
-### Local Browser Examples (macOS)
+# Run
+python main.py "Build a REST API according to SPEC.md"
 
-- Arc:
-  - `export STAGEHAND_ENV=LOCAL`
-  - `export STAGEHAND_LOCAL_BROWSER_PATH="/Applications/Arc.app/Contents/MacOS/Arc"`
-- Brave:
-  - `export STAGEHAND_ENV=LOCAL`
-  - `export STAGEHAND_LOCAL_BROWSER_PATH="/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"`
+# With the Rich TUI dashboard
+python main.py "Build a REST API according to SPEC.md" --dashboard
+
+# Reset target repo to initial commit before running
+python main.py "Build a REST API according to SPEC.md" --reset
+
+# Debug logging
+python main.py "Build a REST API according to SPEC.md" --debug
+```
+
+## Configuration
+
+All configuration is via environment variables in `.env`.
+
+### Required
+
+| Variable | Description |
+|----------|-------------|
+| `GIT_REPO_URL` | URL of the target repository workers will clone and commit to |
+| `LLM_BASE_URL` | Base URL of your LLM API endpoint (OpenAI-compatible) |
+| `LLM_API_KEY` | API key for the LLM endpoint |
+
+For multiple LLM endpoints with load balancing, use `LLM_ENDPOINTS` instead of `LLM_BASE_URL`/`LLM_API_KEY`:
+
+```json
+LLM_ENDPOINTS=[{"name":"primary","endpoint":"https://...","apiKey":"sk-...","weight":100}]
+```
+
+### Workers
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `MAX_WORKERS` | `50` | Maximum number of parallel workers |
+| `WORKER_TIMEOUT` | `1800` | Worker timeout in seconds |
+
+### LLM
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `LLM_MODEL` | `glm-5` | Model name to pass to the API |
+| `LLM_MAX_TOKENS` | `65536` | Max tokens per LLM request |
+| `LLM_TEMPERATURE` | `0.7` | Sampling temperature |
+
+### Sandboxes
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `SANDBOX_CPU_CORES` | `4` | CPU cores per Modal sandbox |
+| `SANDBOX_MEMORY_MB` | `8192` | Memory per Modal sandbox (MB) |
+| `SANDBOX_IDLE_TIMEOUT` | `300` | Sandbox idle timeout in seconds |
+
+### Git
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GIT_MAIN_BRANCH` | `main` | Main branch name in the target repo |
+| `GIT_BRANCH_PREFIX` | `worker/` | Prefix for worker branches |
+
+### Orchestrator
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HEALTH_CHECK_INTERVAL` | `10` | Reconciler health check interval in seconds |
+| `MERGE_STRATEGY` | `rebase` | Merge strategy: `fast-forward`, `rebase`, or `merge-commit` |
+| `FINALIZATION_ENABLED` | `true` | Run build/test sweep after all tasks complete |
+| `FINALIZATION_MAX_ATTEMPTS` | `3` | Max reconciler fix attempts during finalization |
+
+## MCP Server
+
+`packages/mcp-server` exposes Longshot as an [MCP](https://modelcontextprotocol.io) server, letting you control the orchestrator directly from Claude or any MCP-compatible AI assistant.
+
+Build it:
+
+```bash
+pnpm --filter @longshot/mcp-server build
+```
+
+Then add it to your MCP client config pointing at `packages/mcp-server/dist/index.js`.
+
+## Contributing
+
+1. Fork the repo
+2. Create a branch (`git checkout -b feat/your-feature`)
+3. Commit your changes
+4. Open a pull request against `main`
+
+## License
+
+See [LICENSE](./LICENSE).

@@ -1,12 +1,12 @@
 import { execSync } from "node:child_process";
-import type { Handoff } from "@agentswarm/core";
+import type { Handoff } from "@longshot/core";
 
-export async function buildHandoff(
+export function buildHandoff(
   taskId: string,
   status: Handoff["status"],
   summary: string,
   metrics: Handoff["metrics"]
-): Promise<Handoff> {
+): Handoff {
   const diffStat = getGitDiffStat();
   
   return {

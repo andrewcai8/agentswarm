@@ -5,8 +5,8 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Task, Tracer, Span } from "@agentswarm/core";
-import { createLogger } from "@agentswarm/core";
+import type { Task, Tracer, Span } from "@longshot/core";
+import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
 import type { TaskQueue } from "./task-queue.js";
 import type { MergeQueue, MergeStats } from "./merge-queue.js";

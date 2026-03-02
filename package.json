@@ -1,5 +1,5 @@
 {
-  "name": "agentswarm",
+  "name": "longshot",
   "version": "0.1.0",
   "private": true,
   "description": "Multi-agent coding harness",
@@ -18,7 +18,7 @@
   },
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "@agentswarm/core": "workspace:*",
+    "@longshot/core": "workspace:*",
     "@browserbasehq/stagehand": "^3.0.8",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "zod": "^4.3.6"

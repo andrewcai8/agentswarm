@@ -1,4 +1,4 @@
-import { createLogger } from "@agentswarm/core";
+import { createLogger } from "@longshot/core";
 
 const logger = createLogger("scope-tracker", "root-planner");
 

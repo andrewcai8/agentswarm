@@ -1,4 +1,4 @@
-import type { HarnessConfig, LLMEndpoint } from "@agentswarm/core";
+import type { HarnessConfig, LLMEndpoint } from "@longshot/core";
 
 export interface FinalizationConfig {
   maxAttempts: number;
@@ -82,14 +82,14 @@ export function loadConfig(): OrchestratorConfig {
   }
 
   cachedConfig = {
-    maxWorkers: Number(process.env.MAX_WORKERS) || 50,
-    workerTimeout: Number(process.env.WORKER_TIMEOUT) || 1800,
+    maxWorkers: ((v) => Number.isFinite(v) ? v : 50)(Number(process.env.MAX_WORKERS)),
+    workerTimeout: ((v) => Number.isFinite(v) ? v : 1800)(Number(process.env.WORKER_TIMEOUT)),
     mergeStrategy: mergeStrategy as "fast-forward" | "rebase" | "merge-commit",
     llm: {
       endpoints,
       model: process.env.LLM_MODEL || "glm-5",
-      maxTokens: Number(process.env.LLM_MAX_TOKENS) || 65536,
-      temperature: Number(process.env.LLM_TEMPERATURE) || 0.7,
+      maxTokens: ((v) => Number.isFinite(v) ? v : 65536)(Number(process.env.LLM_MAX_TOKENS)),
+      temperature: ((v) => Number.isFinite(v) ? v : 0.7)(Number(process.env.LLM_TEMPERATURE)),
       timeoutMs: process.env.LLM_TIMEOUT_MS ? Number(process.env.LLM_TIMEOUT_MS) : undefined,
     },
     git: {
@@ -99,20 +99,20 @@ export function loadConfig(): OrchestratorConfig {
     },
     sandbox: {
       imageTag: process.env.SANDBOX_IMAGE_TAG || "latest",
-      cpuCores: Number(process.env.SANDBOX_CPU_CORES) || 4,
-      memoryMb: Number(process.env.SANDBOX_MEMORY_MB) || 8192,
-      idleTimeout: Number(process.env.SANDBOX_IDLE_TIMEOUT) || 300,
+      cpuCores: ((v) => Number.isFinite(v) ? v : 4)(Number(process.env.SANDBOX_CPU_CORES)),
+      memoryMb: ((v) => Number.isFinite(v) ? v : 8192)(Number(process.env.SANDBOX_MEMORY_MB)),
+      idleTimeout: ((v) => Number.isFinite(v) ? v : 300)(Number(process.env.SANDBOX_IDLE_TIMEOUT)),
     },
     targetRepoPath: process.env.TARGET_REPO_PATH || "./target-repo",
     pythonPath: process.env.PYTHON_PATH || "python3",
-    healthCheckInterval: Number(process.env.HEALTH_CHECK_INTERVAL) || 10,
+    healthCheckInterval: ((v) => Number.isFinite(v) ? v : 10)(Number(process.env.HEALTH_CHECK_INTERVAL)),
     readinessTimeoutMs: process.env.LLM_READINESS_TIMEOUT_MS
       ? Number(process.env.LLM_READINESS_TIMEOUT_MS)
       : 120_000,
     finalization: {
-      maxAttempts: Number(process.env.FINALIZATION_MAX_ATTEMPTS) || 3,
+      maxAttempts: ((v) => Number.isFinite(v) ? v : 3)(Number(process.env.FINALIZATION_MAX_ATTEMPTS)),
       enabled: process.env.FINALIZATION_ENABLED !== "false",
-      sweepTimeoutMs: Number(process.env.FINALIZATION_SWEEP_TIMEOUT_MS) || 120_000,
+      sweepTimeoutMs: ((v) => Number.isFinite(v) ? v : 120_000)(Number(process.env.FINALIZATION_SWEEP_TIMEOUT_MS)),
     },
   };
 

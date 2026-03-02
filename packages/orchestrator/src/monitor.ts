@@ -1,5 +1,5 @@
-import type { MetricsSnapshot } from "@agentswarm/core";
-import { createLogger } from "@agentswarm/core";
+import type { MetricsSnapshot } from "@longshot/core";
+import { createLogger } from "@longshot/core";
 import type { WorkerPool, Worker } from "./worker-pool.js";
 import type { TaskQueue } from "./task-queue.js";
 
@@ -14,7 +14,6 @@ export class Monitor {
   private config: MonitorConfig;
   private workerPool: WorkerPool;
   private taskQueue: TaskQueue;
-  private mergeStats: { totalMerged: number; totalFailed: number };
   private pollTimer: ReturnType<typeof setInterval> | null;
   private running: boolean;
 
@@ -41,7 +40,6 @@ export class Monitor {
     this.config = config;
     this.workerPool = workerPool;
     this.taskQueue = taskQueue;
-    this.mergeStats = { totalMerged: 0, totalFailed: 0 };
     this.pollTimer = null;
     this.running = false;
 
@@ -160,9 +158,6 @@ export class Monitor {
     this.mergeAttempts += 1;
     if (success) {
       this.mergeSuccesses += 1;
-      this.mergeStats.totalMerged += 1;
-    } else {
-      this.mergeStats.totalFailed += 1;
     }
   }
 

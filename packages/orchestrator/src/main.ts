@@ -1,6 +1,6 @@
 import { config as loadDotenv } from "dotenv";
 import { resolve } from "node:path";
-import { createLogger, enableFileLogging, closeFileLogging, enableTracing, closeTracing, setLogLevel, getLogLevel } from "@agentswarm/core";
+import { createLogger, enableFileLogging, closeFileLogging, enableTracing, closeTracing, setLogLevel, getLogLevel } from "@longshot/core";
 import { createOrchestrator } from "./orchestrator.js";
 
 loadDotenv({ path: resolve(process.cwd(), ".env") });

@@ -21,7 +21,7 @@ def test_image_builds():
     print("TEST 1: Image Build & Tool Verification")
     print("=" * 60)
 
-    app = modal.App.lookup("agentswarm-test", create_if_missing=True)
+    app = modal.App.lookup("longshot-test", create_if_missing=True)
     image = create_agent_image()
 
     # Define a function that runs inside the image to check tools
@@ -70,7 +70,7 @@ def test_sandbox_basic():
     print("TEST 2: Basic Sandbox Operations")
     print("=" * 60)
 
-    app = modal.App.lookup("agentswarm-test", create_if_missing=True)
+    app = modal.App.lookup("longshot-test", create_if_missing=True)
     image = create_agent_image()
 
     # Create sandbox with sleep
@@ -149,7 +149,7 @@ async def test_agent_server():
         print("❌ TEST 3 SKIPPED")
         return False
 
-    app = modal.App.lookup("agentswarm-test", create_if_missing=True)
+    app = modal.App.lookup("longshot-test", create_if_missing=True)
     image = create_worker_image()
     port = 8080
 
@@ -266,7 +266,7 @@ async def test_full_agent(glm5_endpoint: str):
         print("⚠️  packages/sandbox not built. Run 'pnpm build' first.")
         return False
 
-    app = modal.App.lookup("agentswarm-test", create_if_missing=True)
+    app = modal.App.lookup("longshot-test", create_if_missing=True)
     image = create_worker_image()
     port = 8080
 
@@ -372,7 +372,7 @@ async def test_full_agent(glm5_endpoint: str):
 # =============================================================================
 
 def main():
-    parser = argparse.ArgumentParser(description="AgentSwarm E2E Tests")
+    parser = argparse.ArgumentParser(description="Longshot E2E Tests")
     parser.add_argument(
         "test",
         choices=["image", "basic", "server", "full", "all"],

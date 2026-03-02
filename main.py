@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-AgentSwarm CLI — run the orchestrator with human-readable logs.
+Longshot CLI — run the orchestrator with human-readable logs.
 
 Usage:
     python main.py
@@ -192,7 +192,7 @@ def run(request: str, with_dashboard: bool = False, reset: bool = False, debug: 
     if debug:
         env["LOG_LEVEL"] = "debug"
 
-    print(f"{BOLD}{CYAN}▶ AgentSwarm{RESET}")
+    print(f"{BOLD}{CYAN}▶ Longshot{RESET}")
     print(f"  {DIM}Request:{RESET} {request[:120]}")
     print(f"  {DIM}CWD:{RESET}     {project_root}")
     if debug:
@@ -216,7 +216,8 @@ def run(request: str, with_dashboard: bool = False, reset: bool = False, debug: 
         cwd=project_root,
         env=env,
     )
-    assert proc.stdout is not None
+    if proc.stdout is None:
+        raise RuntimeError("Failed to open subprocess stdout pipe")
 
     dashboard_proc: subprocess.Popen[bytes] | None = None
     if with_dashboard:
@@ -329,7 +330,7 @@ def run(request: str, with_dashboard: bool = False, reset: bool = False, debug: 
 
 
 def main() -> None:
-    ap = argparse.ArgumentParser(description="AgentSwarm CLI")
+    ap = argparse.ArgumentParser(description="Longshot CLI")
     ap.add_argument("request", help="Build request, e.g. 'Build Minecraft according to SPEC.md'")
     ap.add_argument("--dashboard", action="store_true",
                     help="Also launch the Rich TUI dashboard")

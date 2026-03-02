@@ -293,7 +293,7 @@ export async function getCurrentBranch(cwd?: string): Promise<string> {
   }
 }
 
-// 7. Get diff statistics (uncommitted changes)
+// 6. Get diff statistics (uncommitted changes)
 export async function getDiffStat(cwd?: string): Promise<DiffStat> {
   const workDir = getCwd(cwd);
   try {
@@ -324,7 +324,7 @@ export async function getDiffStat(cwd?: string): Promise<DiffStat> {
   }
 }
 
-// 8. Get recent commits
+// 7. Get recent commits
 export async function getRecentCommits(count: number, cwd?: string): Promise<CommitInfo[]> {
   const workDir = getCwd(cwd);
   try {
@@ -364,7 +364,7 @@ export async function getRecentCommits(count: number, cwd?: string): Promise<Com
   }
 }
 
-// 9. Get file tree (list of tracked files)
+// 8. Get file tree (list of tracked files)
 export async function getFileTree(cwd?: string, maxDepth?: number): Promise<string[]> {
   const workDir = getCwd(cwd);
   try {
@@ -385,7 +385,7 @@ export async function getFileTree(cwd?: string, maxDepth?: number): Promise<stri
   }
 }
 
-// 10. Check for uncommitted changes
+// 9. Check for uncommitted changes
 export async function hasUncommittedChanges(cwd?: string): Promise<boolean> {
   const workDir = getCwd(cwd);
   try {

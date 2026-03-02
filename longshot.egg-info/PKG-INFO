@@ -1,3 +1,13 @@
+Metadata-Version: 2.4
+Name: longshot
+Version: 0.1.0
+Summary: Massively parallel autonomous coding agent orchestrator
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: rich>=14.3.2
+Dynamic: license-file
+
 # Longshot
 
 [![CI](https://github.com/andrewcai8/longshot/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewcai8/longshot/actions/workflows/ci.yml)

@@ -21,15 +21,55 @@ import { createLogger } from "@longshot/core";
 
 const logger = createLogger("worker-pool", "root-planner");
 
+function isHandoff(value: unknown): value is Handoff {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  if (
+    !("taskId" in value) ||
+    !("status" in value) ||
+    !("summary" in value) ||
+    !("filesChanged" in value) ||
+    !("metrics" in value)
+  ) {
+    return false;
+  }
+
+  return (
+    typeof value.taskId === "string" &&
+    typeof value.status === "string" &&
+    typeof value.summary === "string" &&
+    Array.isArray(value.filesChanged) &&
+    typeof value.metrics === "object" &&
+    value.metrics !== null
+  );
+}
+
 export interface Worker {
   id: string;
   currentTask: Task;
   startedAt: number;
 }
 
+/**
+ * Dependency injection seam for deterministic unit tests.
+ *
+ * This is intentionally tiny and non-breaking: production uses Node built-ins,
+ * while tests can provide stable spawn/timer behavior without forking real processes.
+ */
+export interface WorkerPoolDeps {
+  spawn: typeof spawn;
+  createInterface: typeof createInterface;
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
+  now: () => number;
+}
+
 export class WorkerPool {
   private activeWorkers: Map<string, Worker>;
   private workerPrompt: string;
+  private deps: WorkerPoolDeps;
   private config: {
     maxWorkers: number;
     workerTimeout: number;
@@ -54,9 +94,18 @@ export class WorkerPool {
       gitToken?: string;
     },
     workerPrompt: string,
+    deps?: Partial<WorkerPoolDeps>,
   ) {
     this.activeWorkers = new Map();
     this.workerPrompt = workerPrompt;
+    this.deps = {
+      spawn,
+      createInterface,
+      setTimeout,
+      clearTimeout,
+      now: () => Date.now(),
+      ...deps,
+    };
     this.config = config;
     this.taskCompleteCallbacks = [];
     this.workerFailedCallbacks = [];
@@ -85,7 +134,7 @@ export class WorkerPool {
     const worker: Worker = {
       id: `ephemeral-${task.id}`,
       currentTask: task,
-      startedAt: Date.now(),
+      startedAt: this.deps.now(),
     };
     this.activeWorkers.set(worker.id, worker);
 
@@ -99,6 +148,10 @@ export class WorkerPool {
       workerSpan && this.tracer ? this.tracer.propagationContext(workerSpan) : undefined;
 
     const endpoint = this.config.llm.endpoints[0];
+    if (!endpoint) {
+      throw new Error("No LLM endpoints configured");
+    }
+
     const baseUrl = endpoint.endpoint.replace(/\/+$/, "");
     const llmEndpointUrl = baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`;
 
@@ -170,11 +223,15 @@ export class WorkerPool {
     workerSpan?: Span,
   ): Promise<Handoff> {
     return new Promise<Handoff>((resolve, reject) => {
-      const proc = spawn(this.config.pythonPath, ["-u", "infra/spawn_sandbox.py", payload], {
-        cwd: process.cwd(),
-        env: { ...process.env, PYTHONUNBUFFERED: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      });
+      const proc = this.deps.spawn(
+        this.config.pythonPath,
+        ["-u", "infra/spawn_sandbox.py", payload],
+        {
+          cwd: process.cwd(),
+          env: { ...process.env, PYTHONUNBUFFERED: "1" },
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
 
       logger.debug("Sandbox process spawned", {
         taskId,
@@ -186,7 +243,7 @@ export class WorkerPool {
       const stderrChunks: string[] = [];
       let settled = false;
 
-      const timer = setTimeout(() => {
+      const timer = this.deps.setTimeout(() => {
         if (settled) return;
         settled = true;
         proc.kill("SIGKILL");
@@ -201,7 +258,14 @@ export class WorkerPool {
         );
       }, this.config.workerTimeout * 1000);
 
-      const rl = createInterface({ input: proc.stdout! });
+      if (!proc.stdout) {
+        this.deps.clearTimeout(timer);
+        settled = true;
+        reject(new Error(`Sandbox process stdout unavailable for task ${taskId}`));
+        return;
+      }
+
+      const rl = this.deps.createInterface({ input: proc.stdout });
 
       rl.on("line", (line: string) => {
         stdoutLines.push(line);
@@ -221,12 +285,12 @@ export class WorkerPool {
         }
       });
 
-      proc.stderr!.on("data", (chunk: Buffer) => {
+      proc.stderr?.on("data", (chunk: Buffer) => {
         stderrChunks.push(chunk.toString("utf-8"));
       });
 
       proc.on("close", (_code: number | null) => {
-        clearTimeout(timer);
+        this.deps.clearTimeout(timer);
         if (settled) return;
         settled = true;
 
@@ -259,9 +323,19 @@ export class WorkerPool {
           return;
         }
 
-        const lastLine = stdoutLines[stdoutLines.length - 1];
+        const lastLine = stdoutLines.at(-1);
+        if (!lastLine) {
+          reject(new Error(`Sandbox produced invalid output for task ${taskId}`));
+          return;
+        }
+
         try {
-          resolve(JSON.parse(lastLine) as Handoff);
+          const parsed: unknown = JSON.parse(lastLine);
+          if (!isHandoff(parsed)) {
+            throw new Error("Sandbox output did not match Handoff shape");
+          }
+
+          resolve(parsed);
         } catch {
           reject(
             new Error(`Failed to parse sandbox output as Handoff JSON: ${lastLine.slice(0, 200)}`),
@@ -270,7 +344,7 @@ export class WorkerPool {
       });
 
       proc.on("error", (err: Error) => {
-        clearTimeout(timer);
+        this.deps.clearTimeout(timer);
         if (settled) return;
         settled = true;
         reject(err);
@@ -297,6 +371,10 @@ export class WorkerPool {
     const workerMatch = line.match(/^\[worker:[^\]]*\]\s*(.+)/);
     if (workerMatch) {
       const detail = workerMatch[1];
+      if (!detail) {
+        return;
+      }
+
       logger.info("Worker progress", {
         taskId,
         phase: "execution",
@@ -305,7 +383,10 @@ export class WorkerPool {
 
       const toolCallMatch = detail.match(/Tool calls:\s*(\d+)/);
       if (toolCallMatch) {
-        this.activeToolCalls.set(taskId, parseInt(toolCallMatch[1], 10));
+        const toolCallCount = toolCallMatch[1];
+        if (toolCallCount) {
+          this.activeToolCalls.set(taskId, parseInt(toolCallCount, 10));
+        }
       }
       return;
     }

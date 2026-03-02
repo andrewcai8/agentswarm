@@ -4,7 +4,7 @@ Shared domain types, utilities, and infrastructure for the Longshot multi-agent 
 
 ## Purpose
 
-This package provides the foundational building blocks used by every other package in the monorepo: task and handoff types, wire protocol definitions, structured logging, distributed tracing, and git utilities. It has **zero external dependencies** — pure TypeScript with only Node.js built-ins.
+This package provides the foundational building blocks used by every other package in the monorepo: task and handoff types, structured logging, distributed tracing, and git utilities. It has **zero external dependencies** — pure TypeScript with only Node.js built-ins.
 
 ## Architecture
 
@@ -15,7 +15,6 @@ All exports flow through `src/index.ts`. The package is intentionally thin — n
 | File | Description |
 |------|-------------|
 | `types.ts` | Core domain types: `Task`, `Handoff`, `HarnessConfig`, `MetricsSnapshot`, `SandboxStatus`, `LLMEndpoint`, `LogEntry` |
-| `protocol.ts` | Wire protocol message types for orchestrator↔sandbox communication: `TaskAssignment`, `TaskResult`, `ProgressUpdate`, `HealthResponse` |
 | `logger.ts` | Structured NDJSON logger. Dual output: file (all levels) and stdout (filtered by `LOG_LEVEL`). Tag logs per-agent with `createLogger(agentId, role)` |
 | `tracer.ts` | Distributed tracing with `Tracer` and `Span` classes. Writes to `logs/trace-*.ndjson` and `logs/llm-detail-*.ndjson`. Propagate context across process boundaries with `Tracer.fromPropagated()` |
 | `git.ts` | Async git utilities: `createBranch`, `checkoutBranch`, `mergeBranch` (fast-forward / rebase / merge-commit), `rebaseBranch`, `getDiffStat`, `getRecentCommits`, `getFileTree`, `hasUncommittedChanges` |

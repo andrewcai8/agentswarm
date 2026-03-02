@@ -14,7 +14,8 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "dev": "tsc -b --watch --preserveWatchOutput",
     "clean": "rm -rf dist",
-    "test": "echo 'No tests yet' && exit 0"
+    "test": "tsc && node --test dist/__tests__/*.test.js"
   }
 }

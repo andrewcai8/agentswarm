@@ -2,7 +2,7 @@
 
 import { createLogger } from "@longshot/core";
 
-const logger = createLogger("scope-tracker", "root-planner");
+const _logger = createLogger("scope-tracker", "root-planner");
 
 export interface ScopeOverlap {
   taskId: string;

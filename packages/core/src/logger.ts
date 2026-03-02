@@ -17,8 +17,15 @@ type LogLevel = keyof typeof LOG_LEVEL_ORDER;
  */
 function resolveLogLevel(): LogLevel {
   const raw = (process.env.LOG_LEVEL || "info").toLowerCase().trim();
-  if (raw in LOG_LEVEL_ORDER) return raw as LogLevel;
-  return "info";
+  switch (raw) {
+    case "debug":
+    case "info":
+    case "warn":
+    case "error":
+      return raw;
+    default:
+      return "info";
+  }
 }
 
 let stdoutMinLevel: LogLevel = resolveLogLevel();
@@ -46,7 +53,13 @@ class LogWriter {
    * Safe to call multiple times — subsequent calls are no-ops.
    */
   enable(projectRoot: string): string {
-    if (this.stream) return this.filePath!;
+    if (this.stream) {
+      if (!this.filePath) {
+        throw new Error("File logger stream initialized without file path");
+      }
+
+      return this.filePath;
+    }
 
     const logsDir = resolve(projectRoot, "logs");
     mkdirSync(logsDir, { recursive: true });
@@ -63,7 +76,7 @@ class LogWriter {
 
   write(line: string): void {
     if (this.stream) {
-      this.stream.write(line + "\n");
+      this.stream.write(`${line}\n`);
     }
   }
 
@@ -139,7 +152,7 @@ export class Logger {
 
     // Only write to stdout if level meets the threshold
     if (LOG_LEVEL_ORDER[level] >= LOG_LEVEL_ORDER[stdoutMinLevel]) {
-      process.stdout.write(line + "\n");
+      process.stdout.write(`${line}\n`);
     }
   }
 }

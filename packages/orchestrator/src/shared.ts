@@ -38,6 +38,15 @@ export interface RawTaskInput {
   priority?: number;
 }
 
+function isRawTaskInput(value: unknown): value is RawTaskInput {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "description" in value &&
+    typeof value.description === "string"
+  );
+}
+
 const MAX_FILE_TREE_ENTRIES = 300;
 const MAX_FEATURES_JSON_CHARS = 20_000;
 
@@ -58,7 +67,7 @@ export async function readRepoState(targetRepoPath: string): Promise<RepoState> 
     const raw = await readFile(join(cwd, "FEATURES.json"), "utf-8");
     featuresJson =
       raw.length > MAX_FEATURES_JSON_CHARS
-        ? raw.slice(0, MAX_FEATURES_JSON_CHARS) + "\n... (truncated)"
+        ? `${raw.slice(0, MAX_FEATURES_JSON_CHARS)}\n... (truncated)`
         : raw;
   } catch {
     // FEATURES.json may not exist yet
@@ -67,7 +76,7 @@ export async function readRepoState(targetRepoPath: string): Promise<RepoState> 
   const readOptionalFile = async (filename: string, maxChars: number): Promise<string | null> => {
     try {
       const raw = await readFile(join(cwd, filename), "utf-8");
-      return raw.length > maxChars ? raw.slice(0, maxChars) + "\n... (truncated)" : raw;
+      return raw.length > maxChars ? `${raw.slice(0, maxChars)}\n... (truncated)` : raw;
     } catch {
       return null;
     }
@@ -181,8 +190,9 @@ function isReadOnlyGitCommand(command: string): boolean {
   const trimmed = command.trim();
   if (!trimmed.startsWith("git ") && trimmed !== "git") return false;
   const parts = trimmed.split(/\s+/);
-  if (parts.length < 2) return false;
-  return GIT_READONLY_SUBCOMMANDS.has(parts[1]);
+  const subcommand = parts[1];
+  if (!subcommand) return false;
+  return GIT_READONLY_SUBCOMMANDS.has(subcommand);
 }
 
 /**
@@ -190,11 +200,18 @@ function isReadOnlyGitCommand(command: string): boolean {
  * Security: non-git and mutating git commands are rejected before reaching the shell.
  */
 export function createGitReadOnlyBashTool(cwd: string): ReturnType<typeof createBashTool> {
+  type BashExecOptions = {
+    env?: NodeJS.ProcessEnv;
+    signal?: AbortSignal;
+    onData: (data: Buffer) => void;
+    timeout?: number;
+  };
+
   const operations: BashOperations = {
-    exec: async (command, execCwd, options) => {
+    exec: async (command: string, execCwd: string, options: BashExecOptions) => {
       if (!isReadOnlyGitCommand(command)) {
         const msg = `[blocked] Only read-only git commands are allowed. Allowed subcommands: ${[...GIT_READONLY_SUBCOMMANDS].join(", ")}. Got: "${command.slice(0, 120)}"`;
-        options.onData(Buffer.from(msg + "\n"));
+        options.onData(Buffer.from(`${msg}\n`));
         return { exitCode: 1 };
       }
 
@@ -238,7 +255,7 @@ function salvageTruncatedResponse(content: string): PlannerResponseResult {
     try {
       scratchpad = JSON.parse(`"${scratchpadMatch[1]}"`);
     } catch {
-      scratchpad = scratchpadMatch[1];
+      scratchpad = scratchpadMatch[1] ?? "";
     }
   }
 
@@ -277,8 +294,9 @@ function salvageTruncatedResponse(content: string): PlannerResponseResult {
       if (depth === 0 && objStart !== -1) {
         const objStr = remainder.slice(objStart, i + 1);
         try {
-          const task = JSON.parse(objStr) as RawTaskInput;
-          if (task.description) {
+          const parsedTask: unknown = JSON.parse(objStr);
+          if (isRawTaskInput(parsedTask) && parsedTask.description) {
+            const task = parsedTask;
             tasks.push(task);
           }
         } catch {
@@ -296,8 +314,9 @@ export function parsePlannerResponse(content: string): PlannerResponseResult {
   try {
     let cleaned = content.trim();
     const fenceMatch = cleaned.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
-    if (fenceMatch) {
-      cleaned = fenceMatch[1].trim();
+    const fencedContent = fenceMatch?.[1];
+    if (fencedContent) {
+      cleaned = fencedContent.trim();
     }
 
     const objStart = cleaned.indexOf("{");
@@ -392,9 +411,12 @@ function registerPiModel(llmConfig: LLMConfig) {
 
   // Pi doesn't support multi-endpoint; take the first one.
   const endpoint = llmConfig.endpoints[0];
+  if (!endpoint) {
+    throw new Error("No LLM endpoints configured for Pi session");
+  }
 
   modelRegistry.registerProvider("longshot", {
-    baseUrl: endpoint.endpoint + "/v1",
+    baseUrl: `${endpoint.endpoint}/v1`,
     apiKey: endpoint.apiKey || "no-key-needed",
     api: "openai-completions",
     models: [

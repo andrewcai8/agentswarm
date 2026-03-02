@@ -14,9 +14,7 @@ import {
   MAX_FILES_PER_HANDOFF,
   MAX_HANDOFF_SUMMARY_CHARS,
   type PiSessionResult,
-  parseLLMTaskArray,
   parsePlannerResponse,
-  type RawTaskInput,
   type RepoState,
   readRepoState,
   sleep,
@@ -48,6 +46,20 @@ export interface PlannerConfig {
   maxIterations: number;
 }
 
+/**
+ * Dependency injection seam for deterministic unit tests.
+ * Production uses the Pi session + real repo reads; tests can inject fakes.
+ */
+export interface PlannerDeps {
+  createPlannerPiSession: typeof createPlannerPiSession;
+  cleanupPiSession: typeof cleanupPiSession;
+  parsePlannerResponse: typeof parsePlannerResponse;
+  readRepoState: typeof readRepoState;
+  sleep: typeof sleep;
+  slugifyForBranch: typeof slugifyForBranch;
+  now: () => number;
+}
+
 export class Planner {
   private config: OrchestratorConfig;
   private plannerConfig: PlannerConfig;
@@ -60,6 +72,7 @@ export class Planner {
   private systemPrompt: string;
   private targetRepoPath: string;
   private subplanner: Subplanner | null;
+  private deps: PlannerDeps;
 
   private running: boolean;
   private taskCounter: number;
@@ -71,9 +84,6 @@ export class Planner {
   private activeTasks: Set<string>;
   private dispatchedTaskIds: Set<string>;
   private scopeTracker: ScopeTracker;
-
-  /** Scratchpad: rewritten (not appended) each iteration by the planner LLM. */
-  private scratchpad: string;
 
   private lastSweepResult: SweepResult | null = null;
 
@@ -103,6 +113,7 @@ export class Planner {
     monitor: Monitor,
     systemPrompt: string,
     subplanner?: Subplanner,
+    deps?: Partial<PlannerDeps>,
   ) {
     this.config = config;
     this.plannerConfig = plannerConfig;
@@ -114,6 +125,17 @@ export class Planner {
     this.targetRepoPath = config.targetRepoPath;
     this.subplanner = subplanner ?? null;
 
+    this.deps = {
+      createPlannerPiSession,
+      cleanupPiSession,
+      parsePlannerResponse,
+      readRepoState,
+      sleep,
+      slugifyForBranch,
+      now: () => Date.now(),
+      ...deps,
+    };
+
     this.running = false;
     this.taskCounter = 0;
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
@@ -124,8 +146,6 @@ export class Planner {
     this.activeTasks = new Set();
     this.dispatchedTaskIds = new Set();
     this.scopeTracker = new ScopeTracker();
-
-    this.scratchpad = "";
 
     this.taskCreatedCallbacks = [];
     this.taskCompletedCallbacks = [];
@@ -145,7 +165,7 @@ export class Planner {
     if (this.piSession) return;
 
     logger.info("Initializing Pi agent session for planner");
-    this.piSession = await createPlannerPiSession({
+    this.piSession = await this.deps.createPlannerPiSession({
       systemPrompt: this.systemPrompt,
       targetRepoPath: this.targetRepoPath,
       llmConfig: this.config.llm,
@@ -156,7 +176,7 @@ export class Planner {
 
   private disposeSession(): void {
     if (this.piSession) {
-      cleanupPiSession(this.piSession.session, this.piSession.tempDir);
+      this.deps.cleanupPiSession(this.piSession.session, this.piSession.tempDir);
       this.piSession = null;
       logger.info("Pi agent session disposed");
     }
@@ -232,7 +252,7 @@ export class Planner {
           break;
         }
 
-        await sleep(LOOP_SLEEP_MS);
+        await this.deps.sleep(LOOP_SLEEP_MS);
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
         consecutiveErrors++;
@@ -259,7 +279,7 @@ export class Planner {
           break;
         }
 
-        await sleep(backoffMs);
+        await this.deps.sleep(backoffMs);
       }
     }
 
@@ -267,7 +287,7 @@ export class Planner {
       logger.info("Waiting for remaining active tasks", { count: this.activeTasks.size });
       while (this.activeTasks.size > 0 && this.running) {
         this.collectCompletedHandoffs();
-        await sleep(LOOP_SLEEP_MS);
+        await this.deps.sleep(LOOP_SLEEP_MS);
       }
     }
 
@@ -297,7 +317,7 @@ export class Planner {
   // ---------------------------------------------------------------------------
 
   async readRepoState(): Promise<RepoState> {
-    return readRepoState(this.targetRepoPath);
+    return this.deps.readRepoState(this.targetRepoPath);
   }
 
   async plan(request: string, repoState: RepoState, newHandoffs: Handoff[]): Promise<Task[]> {
@@ -309,7 +329,13 @@ export class Planner {
     });
 
     await this.initSession();
-    const session = this.piSession!.session;
+    const session = this.piSession?.session;
+    if (!session) {
+      logger.warn("Planner session unavailable");
+      iterationSpan?.setStatus("error", "session unavailable");
+      iterationSpan?.end();
+      return [];
+    }
 
     const prompt = isFirstPlan
       ? this.buildInitialMessage(request, repoState)
@@ -341,11 +367,8 @@ export class Planner {
         return [];
       }
 
-      const { scratchpad, tasks: rawTasks } = parsePlannerResponse(responseText);
+      const { scratchpad, tasks: rawTasks } = this.deps.parsePlannerResponse(responseText);
       logger.debug("Planner scratchpad", { scratchpad: scratchpad.slice(0, 500) });
-      if (scratchpad) {
-        this.scratchpad = scratchpad;
-      }
 
       const allParsedTasks: Task[] = rawTasks.map((raw) => {
         this.taskCounter++;
@@ -357,9 +380,9 @@ export class Planner {
           acceptance: raw.acceptance || "",
           branch:
             raw.branch ||
-            `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
+            `${this.config.git.branchPrefix}${id}-${this.deps.slugifyForBranch(raw.description)}`,
           status: "pending" as const,
-          createdAt: Date.now(),
+          createdAt: this.deps.now(),
           priority: raw.priority || 5,
         };
       });
@@ -502,7 +525,7 @@ export class Planner {
 
         const summary =
           h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
-            ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "…"
+            ? `${h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS)}…`
             : h.summary;
         msg += `Summary: ${summary}\n`;
 
@@ -546,7 +569,7 @@ export class Planner {
     if (lockedFiles.length > 0) {
       msg += `## Currently Locked File Scopes (${lockedFiles.length} files)\n`;
       msg += `These files are being modified by active tasks — avoid assigning new work to them:\n`;
-      msg += lockedFiles.join(", ") + `\n\n`;
+      msg += `${lockedFiles.join(", ")}\n\n`;
     }
 
     if (this.lastSweepResult) {

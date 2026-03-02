@@ -2,8 +2,15 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { createLogger } from "./logger.js";
 
 const execFileAsync = promisify(execFile);
+const logger = createLogger("git", "root-planner");
+
+function logBestEffortFailure(operation: string, error: unknown): void {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+  logger.debug(operation, { error: errorMessage });
+}
 
 // Types
 
@@ -71,7 +78,8 @@ async function getConflictingFilesFromStatus(cwd: string): Promise<string[]> {
     }
 
     return conflicts;
-  } catch {
+  } catch (error) {
+    logBestEffortFailure("Failed to collect conflicting files from git status", error);
     return [];
   }
 }
@@ -166,8 +174,8 @@ export async function mergeBranch(
         // Clean up stale rebase state from a previous interrupted operation
         try {
           await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
-        } catch {
-          /* no stale rebase */
+        } catch (error) {
+          logBestEffortFailure("Preflight rebase abort failed", error);
         }
 
         const tmpBranch = `tmp-rebase-${Date.now()}`;
@@ -189,8 +197,8 @@ export async function mergeBranch(
           // Clean up temp branch
           try {
             await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
-          } catch {
-            /* best effort cleanup */
+          } catch (error) {
+            logBestEffortFailure(`Failed to delete temp rebase branch ${tmpBranch}`, error);
           }
           return {
             success: true,
@@ -202,18 +210,18 @@ export async function mergeBranch(
             const conflictingFiles = await getConflictingFilesFromStatus(workDir);
             try {
               await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
-            } catch {
-              /* ignore */
+            } catch (error) {
+              logBestEffortFailure("Failed to abort rebase after conflict", error);
             }
             try {
               await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir });
-            } catch {
-              /* ignore */
+            } catch (error) {
+              logBestEffortFailure(`Failed to checkout original branch ${currentBranch}`, error);
             }
             try {
               await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
-            } catch {
-              /* ignore */
+            } catch (error) {
+              logBestEffortFailure(`Failed to delete temp rebase branch ${tmpBranch}`, error);
             }
             return {
               success: false,
@@ -225,24 +233,22 @@ export async function mergeBranch(
           // Non-conflict failure — abort any in-progress rebase before cleanup
           try {
             await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
-          } catch {
-            /* ignore */
+          } catch (error) {
+            logBestEffortFailure("Failed to abort rebase after non-conflict failure", error);
           }
           try {
             await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir });
-          } catch {
-            /* ignore */
+          } catch (error) {
+            logBestEffortFailure(`Failed to checkout original branch ${currentBranch}`, error);
           }
           try {
             await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
-          } catch {
-            /* ignore */
+          } catch (error) {
+            logBestEffortFailure(`Failed to delete temp rebase branch ${tmpBranch}`, error);
           }
           throw error;
         }
       }
-
-      case "merge-commit":
       default: {
         // Checkout target, then merge with --no-ff
         await execFileAsync("git", ["checkout", targetBranch], { cwd: workDir });
@@ -306,8 +312,8 @@ export async function rebaseBranch(
     // regardless of whether the failure was a conflict or something else.
     try {
       await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
-    } catch {
-      // No rebase in progress or already aborted
+    } catch (error) {
+      logBestEffortFailure("Failed to abort rebase while cleaning repository state", error);
     }
 
     return {
@@ -353,9 +359,9 @@ export async function getDiffStat(cwd?: string): Promise<DiffStat> {
     const deletionsMatch = trimmed.match(/(\d+) deletions?\(-\)/);
 
     return {
-      filesChanged: filesMatch ? parseInt(filesMatch[1], 10) : 0,
-      linesAdded: insertionsMatch ? parseInt(insertionsMatch[1], 10) : 0,
-      linesRemoved: deletionsMatch ? parseInt(deletionsMatch[1], 10) : 0,
+      filesChanged: parseInt(filesMatch?.[1] ?? "0", 10),
+      linesAdded: parseInt(insertionsMatch?.[1] ?? "0", 10),
+      linesRemoved: parseInt(deletionsMatch?.[1] ?? "0", 10),
     };
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -386,12 +392,13 @@ export async function getRecentCommits(count: number, cwd?: string): Promise<Com
 
     for (const block of blocks) {
       const lines = block.trim().split("\n");
-      if (lines.length >= 4) {
+      const [hash, message, author, timestamp] = lines;
+      if (hash && message && author && timestamp) {
         commits.push({
-          hash: lines[0].trim(),
-          message: lines[1].trim(),
-          author: lines[2].trim(),
-          date: parseInt(lines[3].trim(), 10) * 1000, // Convert seconds to ms
+          hash: hash.trim(),
+          message: message.trim(),
+          author: author.trim(),
+          date: parseInt(timestamp.trim(), 10) * 1000, // Convert seconds to ms
         });
       }
     }

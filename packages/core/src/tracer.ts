@@ -50,7 +50,13 @@ class TraceWriter {
    * Safe to call multiple times — subsequent calls are no-ops.
    */
   enable(projectRoot: string): { traceFile: string; llmDetailFile: string } {
-    if (this.stream) return { traceFile: this.filePath!, llmDetailFile: this.llmFilePath! };
+    if (this.stream) {
+      if (!this.filePath || !this.llmFilePath) {
+        throw new Error("Tracer stream initialized without file paths");
+      }
+
+      return { traceFile: this.filePath, llmDetailFile: this.llmFilePath };
+    }
 
     const logsDir = resolve(projectRoot, "logs");
     mkdirSync(logsDir, { recursive: true });
@@ -71,7 +77,7 @@ class TraceWriter {
 
   write(event: SpanEvent): void {
     if (this.stream) {
-      this.stream.write(JSON.stringify(event) + "\n");
+      this.stream.write(`${JSON.stringify(event)}\n`);
     }
   }
 
@@ -88,7 +94,7 @@ class TraceWriter {
     };
     const line = JSON.stringify(entry);
     if (this.llmStream) {
-      this.llmStream.write(line + "\n");
+      this.llmStream.write(`${line}\n`);
     }
   }
 
@@ -115,7 +121,6 @@ export class Span {
   private readonly startTime: number;
   private ended = false;
   private status: "ok" | "error" | undefined;
-  private statusMessage: string | undefined;
   private attrs: Record<string, string | number | boolean> = {};
 
   constructor(
@@ -144,7 +149,9 @@ export class Span {
 
   setStatus(status: "ok" | "error", message?: string): void {
     this.status = status;
-    this.statusMessage = message;
+    if (message) {
+      this.attrs.statusMessage = message;
+    }
   }
 
   setAttribute(key: string, value: string | number | boolean): void {

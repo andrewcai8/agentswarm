@@ -17,7 +17,7 @@ Usage:
     python gource-adapter.py < logs/run-2026-02-14.ndjson > session.gource
     gource --log-format custom session.gource
 
-    # From poke-server SSE:
+    # From SSE endpoint:
     curl -sN http://localhost:8787/events | python gource-adapter.py --sse | gource --log-format custom -
 
     # Generate standalone demo (no orchestrator):
@@ -33,6 +33,7 @@ import random
 import re
 import sys
 import time
+from typing import Any
 
 # ── Colour palette (hex, no #) ──────────────────────────────────────────────
 
@@ -120,7 +121,7 @@ def _emit(ts: int, user: str, action: str, path: str, colour: str):
 # ── NDJSON → Gource ─────────────────────────────────────────────────────────
 
 
-def process_event(event: dict) -> None:
+def process_event(event: dict[str, Any]) -> None:
     msg = event.get("message", "")
     data = event.get("data") or {}
     agent_role = event.get("agentRole", "")

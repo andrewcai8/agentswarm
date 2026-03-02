@@ -10,13 +10,28 @@ import { promisify } from "node:util";
 import type { Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
-import { LLMClient, type LLMMessage } from "./llm-client.js";
-import type { MergeQueue, MergeStats } from "./merge-queue.js";
+import {
+  LLMClient,
+  type LLMClientConfig,
+  type LLMMessage,
+  type LLMResponse,
+} from "./llm-client.js";
+import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import { parseLLMTaskArray, slugifyForBranch } from "./shared.js";
 import type { TaskQueue } from "./task-queue.js";
 
 const execFileAsync = promisify(execFile);
+
+interface ExecErrorShape {
+  stdout?: string;
+  stderr?: string;
+  code?: number | null;
+}
+
+function isExecErrorShape(error: unknown): error is ExecErrorShape {
+  return typeof error === "object" && error !== null;
+}
 const logger = createLogger("reconciler", "reconciler");
 
 export interface ReconcilerConfig {
@@ -37,6 +52,28 @@ interface ExecResult {
   code: number | null;
 }
 
+export type ReconcilerRunCommand = (
+  cmd: string,
+  args: string[],
+  cwd: string,
+) => Promise<ExecResult>;
+
+export type ReconcilerCompleteLLM = (
+  messages: LLMMessage[],
+  overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>,
+  parentSpan?: Span,
+) => Promise<LLMResponse>;
+
+/**
+ * Dependency injection seam for deterministic unit tests.
+ * Production uses real subprocess execution and an LLM client.
+ */
+export interface ReconcilerDeps {
+  runCommand: ReconcilerRunCommand;
+  completeLLM: ReconcilerCompleteLLM;
+  now: () => number;
+}
+
 export interface SweepResult {
   buildOk: boolean;
   testsOk: boolean;
@@ -55,7 +92,7 @@ async function runCommand(cmd: string, args: string[], cwd: string): Promise<Exe
     const result = await execFileAsync(cmd, args, { cwd, maxBuffer: 1024 * 1024 });
     return { stdout: result.stdout, stderr: result.stderr, code: 0 };
   } catch (error: unknown) {
-    const err = error as { stdout?: string; stderr?: string; code?: number | null };
+    const err = isExecErrorShape(error) ? error : {};
     return {
       stdout: err.stdout || "",
       stderr: err.stderr || "",
@@ -71,8 +108,9 @@ async function runCommand(cmd: string, args: string[], cwd: string): Promise<Exe
 export class Reconciler {
   private config: OrchestratorConfig;
   private reconcilerConfig: ReconcilerConfig;
-  private llmClient: LLMClient;
-  private taskQueue: TaskQueue;
+  private completeLLM: ReconcilerCompleteLLM;
+  private runCommand: ReconcilerRunCommand;
+  private now: () => number;
   private mergeQueue: MergeQueue;
   private monitor: Monitor;
   private systemPrompt: string;
@@ -96,14 +134,14 @@ export class Reconciler {
   constructor(
     config: OrchestratorConfig,
     reconcilerConfig: ReconcilerConfig,
-    taskQueue: TaskQueue,
+    _taskQueue: TaskQueue,
     mergeQueue: MergeQueue,
     monitor: Monitor,
     systemPrompt: string,
+    deps?: Partial<ReconcilerDeps>,
   ) {
     this.config = config;
     this.reconcilerConfig = reconcilerConfig;
-    this.taskQueue = taskQueue;
     this.mergeQueue = mergeQueue;
     this.monitor = monitor;
     this.systemPrompt = systemPrompt;
@@ -118,13 +156,19 @@ export class Reconciler {
     this.maxIntervalMs = reconcilerConfig.intervalMs;
     this.currentIntervalMs = reconcilerConfig.intervalMs;
 
-    this.llmClient = new LLMClient({
+    const llmClient = new LLMClient({
       endpoints: config.llm.endpoints,
       model: config.llm.model,
       maxTokens: config.llm.maxTokens,
       temperature: config.llm.temperature,
       timeoutMs: config.llm.timeoutMs,
     });
+
+    this.completeLLM =
+      deps?.completeLLM ??
+      ((messages, overrides, span) => llmClient.complete(messages, overrides, span));
+    this.runCommand = deps?.runCommand ?? runCommand;
+    this.now = deps?.now ?? (() => Date.now());
 
     this.sweepCompleteCallbacks = [];
     this.errorCallbacks = [];
@@ -189,7 +233,7 @@ export class Reconciler {
 
     const buildSpan = sweepSpan?.child("reconciler.build");
     logger.debug("Running tsc --noEmit", { targetRepo: this.targetRepoPath });
-    const tscResult = await runCommand("npx", ["tsc", "--noEmit"], this.targetRepoPath);
+    const tscResult = await this.runCommand("npx", ["tsc", "--noEmit"], this.targetRepoPath);
     const buildOutput = tscResult.stdout + tscResult.stderr;
     const buildNotConfigured = /no inputs were found|could not find a valid tsconfig/i.test(
       buildOutput,
@@ -209,7 +253,7 @@ export class Reconciler {
 
     const buildRunSpan = sweepSpan?.child("reconciler.buildRun");
     logger.debug("Running npm run build", { targetRepo: this.targetRepoPath });
-    const buildRunResult = await runCommand(
+    const buildRunResult = await this.runCommand(
       "npm",
       ["run", "build", "--if-present"],
       this.targetRepoPath,
@@ -234,7 +278,7 @@ export class Reconciler {
 
     const testSpan = sweepSpan?.child("reconciler.test");
     logger.debug("Running npm test", { targetRepo: this.targetRepoPath });
-    const testResult = await runCommand("npm", ["test"], this.targetRepoPath);
+    const testResult = await this.runCommand("npm", ["test"], this.targetRepoPath);
     const testOutput = testResult.stdout + testResult.stderr;
     const testNotConfigured = /Missing script|no test specified/i.test(testOutput);
     const testsOk =
@@ -250,7 +294,7 @@ export class Reconciler {
     testSpan?.setAttributes({ exitCode: testResult.code ?? -1, ok: testsOk, testNotConfigured });
     testSpan?.end();
 
-    const conflictResult = await runCommand(
+    const conflictResult = await this.runCommand(
       "git",
       ["grep", "-rl", "<<<<<<<", "--", "*.ts", "*.tsx", "*.js", "*.json"],
       this.targetRepoPath,
@@ -322,7 +366,11 @@ export class Reconciler {
       };
     }
 
-    const gitResult = await runCommand("git", ["log", "--oneline", "-10"], this.targetRepoPath);
+    const gitResult = await this.runCommand(
+      "git",
+      ["log", "--oneline", "-10"],
+      this.targetRepoPath,
+    );
     const recentCommits = gitResult.stdout.trim();
 
     let userMessage = "";
@@ -367,7 +415,7 @@ export class Reconciler {
     let rawTasks: ReturnType<typeof parseLLMTaskArray>;
 
     try {
-      const response = await this.llmClient.complete(messages, undefined, sweepSpan);
+      const response = await this.completeLLM(messages, undefined, sweepSpan);
       this.monitor.recordTokenUsage(response.usage.totalTokens);
       logger.debug("Reconciler LLM response", {
         contentLength: response.content.length,
@@ -430,7 +478,7 @@ export class Reconciler {
         branch:
           raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
         status: "pending" as const,
-        createdAt: Date.now(),
+        createdAt: this.now(),
         priority: 1,
       });
 

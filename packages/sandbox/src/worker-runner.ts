@@ -93,10 +93,21 @@ function log(msg: string): void {
   process.stderr.write(`[worker] ${msg}\n`);
 }
 
+function hasStatusCode(error: unknown): error is { status: number } {
+  if (typeof error !== "object" || error === null || !("status" in error)) {
+    return false;
+  }
+
+  const status = Reflect.get(error, "status");
+  return typeof status === "number";
+}
+
 function safeExec(cmd: string, cwd: string): string {
   try {
     return execSync(cmd, { cwd, encoding: "utf-8", timeout: 30_000 }).trim();
-  } catch {
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`safeExec failed: ${cmd} (${errorMessage})`);
     return "";
   }
 }
@@ -194,14 +205,20 @@ export async function runWorker(): Promise<void> {
   let toolCallCount = 0;
   let lastAssistantMessage = "";
 
-  session.subscribe((event) => {
-    if (event.type === "tool_execution_start") {
+  session.subscribe((event: unknown) => {
+    if (typeof event !== "object" || event === null || !("type" in event)) {
+      return;
+    }
+
+    const eventType = event.type;
+
+    if (eventType === "tool_execution_start") {
       toolCallCount++;
       if (toolCallCount % 5 === 0) {
         log(`Tool calls: ${toolCallCount}`);
       }
     }
-    if (event.type === "message_end" && "message" in event) {
+    if (eventType === "message_end" && "message" in event) {
       const msg = event.message;
       if (msg && typeof msg === "object" && "role" in msg && msg.role === "assistant") {
         const content = "content" in msg ? msg.content : undefined;
@@ -250,12 +267,12 @@ export async function runWorker(): Promise<void> {
 
   const gitignorePath = `${WORK_DIR}/.gitignore`;
   if (!existsSync(gitignorePath)) {
-    writeFileSync(gitignorePath, GITIGNORE_ESSENTIALS + "\n", "utf-8");
+    writeFileSync(gitignorePath, `${GITIGNORE_ESSENTIALS}\n`, "utf-8");
     log("Created .gitignore with artifact exclusions");
   } else {
     const existing = readFileSync(gitignorePath, "utf-8");
     if (!existing.includes("node_modules")) {
-      appendFileSync(gitignorePath, "\n" + GITIGNORE_ESSENTIALS + "\n", "utf-8");
+      appendFileSync(gitignorePath, `\n${GITIGNORE_ESSENTIALS}\n`, "utf-8");
       log("Appended artifact exclusions to existing .gitignore");
     }
   }
@@ -283,7 +300,7 @@ export async function runWorker(): Promise<void> {
       buildExitCode = 0;
       log("Post-agent build check: PASS");
     } catch (buildErr: unknown) {
-      const code = (buildErr as { status?: number }).status;
+      const code = hasStatusCode(buildErr) ? buildErr.status : undefined;
       buildExitCode = code ?? 1;
       log(`Post-agent build check: FAIL (exit code ${buildExitCode})`);
     }
@@ -306,12 +323,13 @@ export async function runWorker(): Promise<void> {
   if (numstat) {
     for (const line of numstat.split("\n")) {
       const parts = line.split("\t");
-      if (parts.length >= 3) {
-        if (isArtifact(parts[2])) continue;
-        const added = parseInt(parts[0], 10);
-        const removed = parseInt(parts[1], 10);
-        if (!isNaN(added)) linesAdded += added;
-        if (!isNaN(removed)) linesRemoved += removed;
+      const [addedRaw, removedRaw, filePath] = parts;
+      if (addedRaw && removedRaw && filePath) {
+        if (isArtifact(filePath)) continue;
+        const added = parseInt(addedRaw, 10);
+        const removed = parseInt(removedRaw, 10);
+        if (!Number.isNaN(added)) linesAdded += added;
+        if (!Number.isNaN(removed)) linesRemoved += removed;
       }
     }
   }
@@ -367,9 +385,23 @@ export async function runWorker(): Promise<void> {
 function readTaskIdSafe(): string {
   try {
     const raw = readFileSync(TASK_PATH, "utf-8");
-    const payload = JSON.parse(raw) as { task?: { id?: string } };
-    return payload.task?.id ?? "unknown";
-  } catch {
+    const payloadRaw: unknown = JSON.parse(raw);
+    if (
+      typeof payloadRaw === "object" &&
+      payloadRaw !== null &&
+      "task" in payloadRaw &&
+      typeof payloadRaw.task === "object" &&
+      payloadRaw.task !== null &&
+      "id" in payloadRaw.task &&
+      typeof payloadRaw.task.id === "string"
+    ) {
+      return payloadRaw.task.id;
+    }
+
+    return "unknown";
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log(`Failed to read task id from task payload: ${errorMessage}`);
     return "unknown";
   }
 }

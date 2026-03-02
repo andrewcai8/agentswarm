@@ -18,10 +18,11 @@
   },
   "devDependencies": {
     "@types/node": "^25.3.3",
-    "typescript": "^5.5.0"
+    "typescript": "^5.8.3"
   },
   "scripts": {
     "build": "tsc",
+    "dev": "tsc -b --watch --preserveWatchOutput",
     "typecheck": "tsc --noEmit",
     "test": "tsc && node --test dist/__tests__/*.test.js",
     "clean": "rm -rf dist",

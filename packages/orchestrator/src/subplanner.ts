@@ -12,7 +12,6 @@ import {
   MAX_FILES_PER_HANDOFF,
   MAX_HANDOFF_SUMMARY_CHARS,
   type PiSessionResult,
-  parseLLMTaskArray,
   parsePlannerResponse,
   type RawTaskInput,
   type RepoState,
@@ -518,7 +517,7 @@ export class Subplanner {
 
         const summary =
           h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
-            ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "\u2026"
+            ? `${h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS)}\u2026`
             : h.summary;
         msg += `Summary: ${summary}\n`;
 

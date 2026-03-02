@@ -2,7 +2,7 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { HarnessConfig, Span, Tracer } from "@longshot/core";
+import type { HarnessConfig, Tracer } from "@longshot/core";
 import {
   checkoutBranch,
   mergeBranch as coreMergeBranch,
@@ -35,75 +35,22 @@ export interface MergeStats {
   totalConflicts: number;
 }
 
-async function abortMerge(cwd: string): Promise<void> {
-  try {
-    await execFileAsync("git", ["rebase", "--abort"], { cwd });
-  } catch {
-    // No rebase in progress
-  }
-  try {
-    await execFileAsync("git", ["merge", "--abort"], { cwd });
-  } catch {
-    // No merge in progress
-  }
-}
-
-/**
- * Nuclear git cleanup — guarantees the working tree and index are clean and
- * HEAD points at `mainBranch`.  Used as a defensive pre-check before every
- * merge attempt and as a last-resort recovery after failures.
- *
- * Sequence: abort any in-progress rebase/merge → hard-reset index → remove
- * untracked files → checkout main.  Every step is wrapped in try/catch so
- * the function never throws.
- */
-async function ensureCleanState(mainBranch: string, cwd: string): Promise<void> {
-  // 1. Abort any in-progress operation
-  await abortMerge(cwd);
-  // 2. Hard-reset to discard any dirty index / working-tree changes
-  try {
-    await execFileAsync("git", ["reset", "--hard", "HEAD"], { cwd });
-  } catch {
-    /* best effort */
-  }
-  // 3. Remove untracked files left by temp branches or partial merges
-  try {
-    await execFileAsync("git", ["clean", "-fd"], { cwd });
-  } catch {
-    /* best effort */
-  }
-  // 4. Delete any leftover retry-rebase-* temp branches
-  try {
-    const { stdout } = await execFileAsync("git", ["branch", "--list", "retry-rebase-*"], { cwd });
-    const branches = stdout
-      .trim()
-      .split("\n")
-      .map((b) => b.trim())
-      .filter(Boolean);
-    for (const branch of branches) {
-      try {
-        await execFileAsync("git", ["branch", "-D", branch], { cwd });
-      } catch {
-        /* best effort */
-      }
-    }
-  } catch {
-    /* best effort */
-  }
-  // 5. Get back to main
-  try {
-    await execFileAsync("git", ["checkout", mainBranch], { cwd });
-  } catch {
-    /* best effort */
-  }
-}
-
 const logger = createLogger("merge-queue", "root-planner");
 
 interface MergeQueueEntry {
   branch: string;
   priority: number;
   enqueuedAt: number;
+}
+
+export interface MergeQueueDeps {
+  execFileAsync: typeof execFileAsync;
+  checkoutBranch: typeof checkoutBranch;
+  mergeBranch: typeof coreMergeBranch;
+  rebaseBranch: typeof rebaseBranch;
+  now: () => number;
+  setTimeout: typeof setTimeout;
+  clearTimeout: typeof clearTimeout;
 }
 
 export class MergeQueue {
@@ -125,14 +72,23 @@ export class MergeQueue {
   private retryCount: Map<string, number>;
   private maxConflictRetries: number;
 
-  constructor(config: {
-    mergeStrategy: MergeStrategy;
-    mainBranch: string;
-    repoPath: string;
-    gitMutex?: GitMutex;
-    /** Max times to re-queue a conflicting branch before firing onConflict. Default: 2. */
-    maxConflictRetries?: number;
-  }) {
+  /**
+   * Dependency injection seam for deterministic unit tests.
+   * Production uses real git ops; tests can provide a pure in-memory implementation.
+   */
+  private deps: MergeQueueDeps;
+
+  constructor(
+    config: {
+      mergeStrategy: MergeStrategy;
+      mainBranch: string;
+      repoPath: string;
+      gitMutex?: GitMutex;
+      /** Max times to re-queue a conflicting branch before firing onConflict. Default: 2. */
+      maxConflictRetries?: number;
+    },
+    deps?: Partial<MergeQueueDeps>,
+  ) {
     this.queue = [];
     this.merged = new Set();
     this.stats = {
@@ -152,6 +108,17 @@ export class MergeQueue {
     this.conflictCallbacks = [];
     this.retryCount = new Map();
     this.maxConflictRetries = config.maxConflictRetries ?? 2;
+
+    this.deps = {
+      execFileAsync,
+      checkoutBranch,
+      mergeBranch: coreMergeBranch,
+      rebaseBranch,
+      now: () => Date.now(),
+      setTimeout,
+      clearTimeout,
+      ...deps,
+    };
   }
 
   setTracer(tracer: Tracer): void {
@@ -169,7 +136,7 @@ export class MergeQueue {
       return;
     }
 
-    this.queue.push({ branch, priority, enqueuedAt: Date.now() });
+    this.queue.push({ branch, priority, enqueuedAt: this.deps.now() });
     this.queue.sort((a, b) =>
       a.priority !== b.priority ? a.priority - b.priority : a.enqueuedAt - b.enqueuedAt,
     );
@@ -221,17 +188,17 @@ export class MergeQueue {
       }
 
       if (this.backgroundRunning) {
-        this.backgroundTimer = setTimeout(() => void tick(), intervalMs);
+        this.backgroundTimer = this.deps.setTimeout(() => void tick(), intervalMs);
       }
     };
 
-    this.backgroundTimer = setTimeout(() => void tick(), intervalMs);
+    this.backgroundTimer = this.deps.setTimeout(() => void tick(), intervalMs);
   }
 
   stopBackground(): void {
     this.backgroundRunning = false;
     if (this.backgroundTimer) {
-      clearTimeout(this.backgroundTimer);
+      this.deps.clearTimeout(this.backgroundTimer);
       this.backgroundTimer = null;
     }
     logger.info("Background merge queue stopped");
@@ -281,10 +248,10 @@ export class MergeQueue {
     }
 
     try {
-      await ensureCleanState(this.mainBranch, cwd);
+      await this.ensureCleanState(this.mainBranch, cwd);
 
       try {
-        await execFileAsync("git", ["fetch", "origin", branch], { cwd });
+        await this.deps.execFileAsync("git", ["fetch", "origin", branch], { cwd });
       } catch (fetchError) {
         const fetchMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
         logger.warn(`Failed to fetch branch ${branch} from origin, trying local`, {
@@ -293,7 +260,7 @@ export class MergeQueue {
       }
       logger.debug("Fetch completed for branch", { branch, taskId });
 
-      await checkoutBranch(this.mainBranch, cwd);
+      await this.deps.checkoutBranch(this.mainBranch, cwd);
 
       // After fetch, the branch exists as a remote tracking ref (origin/<branch>).
       // git merge cannot resolve bare branch names like "worker/task-049" to their
@@ -305,8 +272,8 @@ export class MergeQueue {
         mainBranch: this.mainBranch,
         strategy: this.mergeStrategy,
       });
-      const mergeStartMs = Date.now();
-      let result = await coreMergeBranch(mergeRef, this.mainBranch, this.mergeStrategy, cwd);
+      const mergeStartMs = this.deps.now();
+      let result = await this.deps.mergeBranch(mergeRef, this.mainBranch, this.mergeStrategy, cwd);
 
       if (!result.success && !result.conflicted && this.mergeStrategy !== "merge-commit") {
         logger.warn(`${this.mergeStrategy} failed for ${branch}, falling back to merge-commit`, {
@@ -314,18 +281,18 @@ export class MergeQueue {
           taskId,
           originalError: result.message,
         });
-        await abortMerge(cwd);
-        await checkoutBranch(this.mainBranch, cwd);
-        result = await coreMergeBranch(mergeRef, this.mainBranch, "merge-commit", cwd);
+        await this.abortMerge(cwd);
+        await this.deps.checkoutBranch(this.mainBranch, cwd);
+        result = await this.deps.mergeBranch(mergeRef, this.mainBranch, "merge-commit", cwd);
       }
 
       if (result.success) {
-        logger.debug("Merge timing", { branch, durationMs: Date.now() - mergeStartMs });
+        logger.debug("Merge timing", { branch, durationMs: this.deps.now() - mergeStartMs });
         this.merged.add(branch);
         this.stats.totalMerged++;
 
         try {
-          await execFileAsync("git", ["push", "origin", this.mainBranch], { cwd });
+          await this.deps.execFileAsync("git", ["push", "origin", this.mainBranch], { cwd });
           logger.info(`Pushed ${this.mainBranch} to origin after merging ${branch}`, {
             branch,
             taskId,
@@ -333,10 +300,13 @@ export class MergeQueue {
           });
 
           try {
-            await execFileAsync("git", ["push", "origin", "--delete", branch], { cwd });
+            await this.deps.execFileAsync("git", ["push", "origin", "--delete", branch], { cwd });
             logger.debug(`Deleted remote branch ${branch}`, { branch, taskId });
-          } catch {
-            /* best effort */
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.debug(`Best-effort delete of remote branch ${branch} failed`, {
+              error: errorMessage,
+            });
           }
         } catch (pushError) {
           const pushMsg = pushError instanceof Error ? pushError.message : String(pushError);
@@ -360,7 +330,7 @@ export class MergeQueue {
 
       if (result.conflicted) {
         const conflicts = result.conflictingFiles ?? [];
-        await abortMerge(cwd);
+        await this.abortMerge(cwd);
 
         this.stats.totalConflicts++;
 
@@ -370,13 +340,17 @@ export class MergeQueue {
           // merge attempt works against current HEAD rather than a stale base.
           let rebased = false;
           try {
-            const localBranch = `retry-rebase-${Date.now()}`;
-            await execFileAsync("git", ["checkout", "-b", localBranch, `origin/${branch}`], {
-              cwd,
-            });
-            const rebaseResult = await rebaseBranch(localBranch, this.mainBranch, cwd);
+            const localBranch = `retry-rebase-${this.deps.now()}`;
+            await this.deps.execFileAsync(
+              "git",
+              ["checkout", "-b", localBranch, `origin/${branch}`],
+              {
+                cwd,
+              },
+            );
+            const rebaseResult = await this.deps.rebaseBranch(localBranch, this.mainBranch, cwd);
             if (rebaseResult.success) {
-              await execFileAsync(
+              await this.deps.execFileAsync(
                 "git",
                 ["push", "origin", `${localBranch}:${branch}`, "--force"],
                 { cwd },
@@ -384,14 +358,23 @@ export class MergeQueue {
               rebased = true;
               logger.info("Rebased branch onto latest main before retry", { branch, taskId });
             }
-            await ensureCleanState(this.mainBranch, cwd);
+            await this.ensureCleanState(this.mainBranch, cwd);
             try {
-              await execFileAsync("git", ["branch", "-D", localBranch], { cwd });
-            } catch {
-              /* best effort */
+              await this.deps.execFileAsync("git", ["branch", "-D", localBranch], { cwd });
+            } catch (error) {
+              const errorMessage = error instanceof Error ? error.message : String(error);
+              logger.debug(`Best-effort delete of local retry branch ${localBranch} failed`, {
+                error: errorMessage,
+              });
             }
-          } catch {
-            await ensureCleanState(this.mainBranch, cwd);
+          } catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            logger.warn("Retry rebase flow failed; restoring clean state", {
+              branch,
+              taskId,
+              error: errorMessage,
+            });
+            await this.ensureCleanState(this.mainBranch, cwd);
           }
 
           this.enqueue(branch, 1);
@@ -461,13 +444,79 @@ export class MergeQueue {
       span?.setStatus("error", msg);
       span?.end();
 
-      await ensureCleanState(this.mainBranch, cwd);
+      await this.ensureCleanState(this.mainBranch, cwd);
 
       return { success: false, status: "failed", branch, message: msg };
     } finally {
       if (this.gitMutex) {
         this.gitMutex.release();
       }
+    }
+  }
+
+  private async abortMerge(cwd: string): Promise<void> {
+    try {
+      await this.deps.execFileAsync("git", ["rebase", "--abort"], { cwd });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Best-effort rebase abort failed", { error: errorMessage });
+    }
+    try {
+      await this.deps.execFileAsync("git", ["merge", "--abort"], { cwd });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Best-effort merge abort failed", { error: errorMessage });
+    }
+  }
+
+  /**
+   * Nuclear git cleanup — best-effort and never throws.
+   * Kept as a method so unit tests can inject git operations.
+   */
+  private async ensureCleanState(mainBranch: string, cwd: string): Promise<void> {
+    await this.abortMerge(cwd);
+    try {
+      await this.deps.execFileAsync("git", ["reset", "--hard", "HEAD"], { cwd });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Best-effort git reset --hard failed", { error: errorMessage });
+    }
+    try {
+      await this.deps.execFileAsync("git", ["clean", "-fd"], { cwd });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Best-effort git clean -fd failed", { error: errorMessage });
+    }
+    try {
+      const { stdout } = await this.deps.execFileAsync(
+        "git",
+        ["branch", "--list", "retry-rebase-*"],
+        { cwd },
+      );
+      const branches = stdout
+        .trim()
+        .split("\n")
+        .map((b) => b.trim())
+        .filter(Boolean);
+      for (const branch of branches) {
+        try {
+          await this.deps.execFileAsync("git", ["branch", "-D", branch], { cwd });
+        } catch (error) {
+          const errorMessage = error instanceof Error ? error.message : String(error);
+          logger.debug(`Best-effort delete of temp branch ${branch} failed`, {
+            error: errorMessage,
+          });
+        }
+      }
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Best-effort temp branch cleanup scan failed", { error: errorMessage });
+    }
+    try {
+      await this.deps.execFileAsync("git", ["checkout", mainBranch], { cwd });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug(`Best-effort checkout of ${mainBranch} failed`, { error: errorMessage });
     }
   }
 

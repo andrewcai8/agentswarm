@@ -1,7 +1,9 @@
 /** @module Handoff construction utilities for packaging worker results with git diff statistics */
 
 import { execSync } from "node:child_process";
-import type { Handoff } from "@longshot/core";
+import { createLogger, type Handoff } from "@longshot/core";
+
+const logger = createLogger("sandbox-handoff", "worker");
 
 export function buildHandoff(
   taskId: string,
@@ -10,20 +12,27 @@ export function buildHandoff(
   metrics: Handoff["metrics"],
 ): Handoff {
   const diffStat = getGitDiffStat();
+  const normalizedDiffStat = diffStat ?? {
+    filesChanged: [],
+    linesAdded: 0,
+    linesRemoved: 0,
+    filesCreated: 0,
+    filesModified: 0,
+  };
 
   return {
     taskId,
     status,
     summary,
     diff: "",
-    filesChanged: diffStat.filesChanged,
-    concerns: [],
-    suggestions: [],
+    filesChanged: normalizedDiffStat.filesChanged,
+    concerns: diffStat ? [] : ["Unable to compute git diff statistics"],
+    suggestions: diffStat ? [] : ["Check git availability and repository state"],
     metrics: {
-      linesAdded: diffStat.linesAdded,
-      linesRemoved: diffStat.linesRemoved,
-      filesCreated: diffStat.filesCreated,
-      filesModified: diffStat.filesModified,
+      linesAdded: normalizedDiffStat.linesAdded,
+      linesRemoved: normalizedDiffStat.linesRemoved,
+      filesCreated: normalizedDiffStat.filesCreated,
+      filesModified: normalizedDiffStat.filesModified,
       tokensUsed: metrics.tokensUsed,
       toolCallCount: metrics.toolCallCount,
       durationMs: metrics.durationMs,
@@ -39,7 +48,7 @@ interface DiffStatResult {
   filesModified: number;
 }
 
-function getGitDiffStat(): DiffStatResult {
+function getGitDiffStat(): DiffStatResult | undefined {
   try {
     // Get files changed with line counts
     const numstatOutput = execSync("git diff --numstat", {
@@ -54,10 +63,11 @@ function getGitDiffStat(): DiffStatResult {
     if (numstatOutput) {
       for (const line of numstatOutput.split("\n")) {
         const parts = line.split("\t");
-        if (parts.length >= 3) {
-          if (parts[0] !== "-") linesAdded += parseInt(parts[0], 10);
-          if (parts[1] !== "-") linesRemoved += parseInt(parts[1], 10);
-          filesChanged.push(parts[2]);
+        const [addedRaw, removedRaw, filePath] = parts;
+        if (addedRaw && removedRaw && filePath) {
+          if (addedRaw !== "-") linesAdded += parseInt(addedRaw, 10);
+          if (removedRaw !== "-") linesRemoved += parseInt(removedRaw, 10);
+          filesChanged.push(filePath);
         }
       }
     }
@@ -71,12 +81,18 @@ function getGitDiffStat(): DiffStatResult {
       }).trim();
       filesCreated = newFiles ? newFiles.split("\n").length : 0;
       filesModified = Math.max(0, filesChanged.length - filesCreated);
-    } catch {
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      logger.debug("Failed to classify created files from git diff-filter=A", {
+        error: errorMessage,
+      });
       filesModified = filesChanged.length;
     }
 
     return { filesChanged, linesAdded, linesRemoved, filesCreated, filesModified };
-  } catch {
-    return { filesChanged: [], linesAdded: 0, linesRemoved: 0, filesCreated: 0, filesModified: 0 };
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    logger.warn("Failed to compute git diff statistics", { error: errorMessage });
+    return undefined;
   }
 }

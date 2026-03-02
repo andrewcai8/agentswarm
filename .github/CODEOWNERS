@@ -8,7 +8,6 @@
 /packages/core/          @andrewcai8
 /packages/orchestrator/  @andrewcai8
 /packages/sandbox/       @andrewcai8
-/packages/mcp-server/    @andrewcai8
 
 # Python CLI
 /main.py                 @andrewcai8

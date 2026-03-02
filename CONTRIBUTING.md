@@ -29,7 +29,9 @@ cp .env.example .env
 # Edit .env with your API keys
 ```
 
-`pnpm build` compiles in dependency order: `core` first, then `orchestrator`, `sandbox`, and `mcp-server` in parallel (via Turborepo).
+`pnpm build` compiles in dependency order: `core` first, then `orchestrator` and `sandbox` in parallel (via Turborepo).
+
+For iterative development, run `pnpm dev` in a separate terminal. It starts `tsc -b --watch` across packages so builds update automatically on save.
 
 ## Running Tests
 
@@ -56,7 +58,6 @@ Modal is only required for `spawn_sandbox.py`, which runs worker tasks in cloud 
 - Orchestrator logic (planner, merge queue, reconciler)
 - Planner output (LLM calls go to your API key, not Modal)
 - Core utilities
-- MCP server behavior
 
 **You need Modal for:**
 - Full E2E runs that actually execute code in sandboxes
@@ -124,9 +125,6 @@ The brain. 14 source files covering the planner, worker pool, merge queue, recon
 
 Three files. This is the Modal worker harness that runs inside the sandbox: clones the repo, sets up the environment, runs the coding agent, and writes `result.json`. Changes here affect what happens inside each parallel worker.
 
-### `packages/mcp-server` ⭐⭐ Medium
-
-Single file. Exposes Longshot as an MCP tool by managing the orchestrator subprocess and streaming its output. Good target if you're familiar with the Model Context Protocol.
 
 ## Code Style
 

@@ -15,12 +15,12 @@ import { MergeQueue } from "./merge-queue.js";
 import { Monitor } from "./monitor.js";
 import { Planner } from "./planner.js";
 import { Reconciler, type SweepResult } from "./reconciler.js";
-import { GitMutex, slugifyForBranch } from "./shared.js";
+import { GitMutex } from "./shared.js";
 import { DEFAULT_SUBPLANNER_CONFIG, Subplanner } from "./subplanner.js";
 import { TaskQueue } from "./task-queue.js";
 import { WorkerPool } from "./worker-pool.js";
 
-const execFileAsync = promisify(execFile);
+const _execFileAsync = promisify(execFile);
 const logger = createLogger("orchestrator", "root-planner");
 
 // ---------------------------------------------------------------------------

@@ -257,7 +257,9 @@ describe("createFailureHandoff", () => {
 
     const result = createFailureHandoff(task, error);
     assert.strictEqual(result.suggestions.length, 1);
-    assert.ok(result.suggestions[0].includes("worker"));
+    const firstSuggestion = result.suggestions[0];
+    assert.ok(firstSuggestion);
+    assert.ok(firstSuggestion.includes("worker"));
   });
 });
 
@@ -266,22 +268,28 @@ describe("parseLLMTaskArray", () => {
     const input = '[{"description": "Do thing", "scope": ["a.ts"]}]';
     const result = parseLLMTaskArray(input);
     assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0].description, "Do thing");
-    assert.deepStrictEqual(result[0].scope, ["a.ts"]);
+    const firstTask = result[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Do thing");
+    assert.deepStrictEqual(firstTask.scope, ["a.ts"]);
   });
 
   it("parses JSON wrapped in markdown code block", () => {
     const input = '```json\n[{"description": "Do thing"}]\n```';
     const result = parseLLMTaskArray(input);
     assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0].description, "Do thing");
+    const firstTask = result[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Do thing");
   });
 
   it("parses JSON with surrounding text", () => {
     const input = 'Here are the tasks:\n[{"description": "Do thing"}]\nDone!';
     const result = parseLLMTaskArray(input);
     assert.strictEqual(result.length, 1);
-    assert.strictEqual(result[0].description, "Do thing");
+    const firstTask = result[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Do thing");
   });
 
   it("throws on invalid JSON", () => {

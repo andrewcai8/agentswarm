@@ -44,6 +44,10 @@ export class PriorityQueue {
     }
 
     const min = this.heap[0];
+    if (!min) {
+      return undefined;
+    }
+
     const last = this.heap.pop();
 
     if (this.heap.length > 0 && last !== undefined) {
@@ -95,13 +99,18 @@ export class PriorityQueue {
   private bubbleUp(index: number): void {
     while (index > 0) {
       const parentIndex = Math.floor((index - 1) / 2);
+      const currentTask = this.heap[index];
+      const parentTask = this.heap[parentIndex];
+      if (!currentTask || !parentTask) {
+        break;
+      }
 
-      if (this.compareTasks(this.heap[index], this.heap[parentIndex]) >= 0) {
+      if (this.compareTasks(currentTask, parentTask) >= 0) {
         break;
       }
 
       // Swap
-      [this.heap[index], this.heap[parentIndex]] = [this.heap[parentIndex], this.heap[index]];
+      [this.heap[index], this.heap[parentIndex]] = [parentTask, currentTask];
       index = parentIndex;
     }
   }
@@ -117,16 +126,24 @@ export class PriorityQueue {
       const rightChildIndex = 2 * index + 2;
       let smallestIndex = index;
 
+      const smallestTask = this.heap[smallestIndex];
+      const leftTask = this.heap[leftChildIndex];
       if (
         leftChildIndex < length &&
-        this.compareTasks(this.heap[leftChildIndex], this.heap[smallestIndex]) < 0
+        leftTask &&
+        smallestTask &&
+        this.compareTasks(leftTask, smallestTask) < 0
       ) {
         smallestIndex = leftChildIndex;
       }
 
+      const rightTask = this.heap[rightChildIndex];
+      const nextSmallestTask = this.heap[smallestIndex];
       if (
         rightChildIndex < length &&
-        this.compareTasks(this.heap[rightChildIndex], this.heap[smallestIndex]) < 0
+        rightTask &&
+        nextSmallestTask &&
+        this.compareTasks(rightTask, nextSmallestTask) < 0
       ) {
         smallestIndex = rightChildIndex;
       }
@@ -136,7 +153,13 @@ export class PriorityQueue {
       }
 
       // Swap
-      [this.heap[index], this.heap[smallestIndex]] = [this.heap[smallestIndex], this.heap[index]];
+      const currentTask = this.heap[index];
+      const smallestTaskForSwap = this.heap[smallestIndex];
+      if (!currentTask || !smallestTaskForSwap) {
+        break;
+      }
+
+      [this.heap[index], this.heap[smallestIndex]] = [smallestTaskForSwap, currentTask];
       index = smallestIndex;
     }
   }

@@ -57,7 +57,7 @@ describe("Monitor", () => {
   let config: MonitorConfig;
 
   afterEach(() => {
-    if (monitor && monitor.isRunning()) {
+    if (monitor?.isRunning()) {
       monitor.stop();
     }
   });
@@ -201,7 +201,9 @@ describe("Monitor", () => {
       const timedOut = monitor.getTimedOutWorkers();
 
       assert.strictEqual(timedOut.length, 1);
-      assert.strictEqual(timedOut[0].id, "worker-2");
+      const firstTimedOutWorker = timedOut[0];
+      assert.ok(firstTimedOutWorker);
+      assert.strictEqual(firstTimedOutWorker.id, "worker-2");
     });
   });
 });

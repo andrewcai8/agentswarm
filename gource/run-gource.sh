@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./run-gource.sh --demo                     # synthetic demo (no orchestrator)
-#   ./run-gource.sh --live                     # live from poke-server SSE
+#   ./run-gource.sh --live                     # live from SSE event stream
 #   ./run-gource.sh --replay logs/file.ndjson  # replay saved NDJSON log
 #   ./run-gource.sh "Build a Minecraft..."     # live orchestrator run
 
@@ -79,7 +79,7 @@ case "$MODE" in
 
     --live)
         URL="${2:-http://localhost:8787/events}"
-        echo "Live from $URL (run pnpm poke:dev first)"
+        echo "Live from $URL"
         TMP="$DIR/.gource-live.log"
         > "$TMP"
         curl -sN "$URL" | python "$DIR/gource-adapter.py" --sse >> "$TMP" &
@@ -126,7 +126,7 @@ case "$MODE" in
         echo "Usage: $0 <mode>"
         echo ""
         echo "  --demo                   Synthetic demo (no orchestrator)"
-        echo "  --live [SSE_URL]         Live from poke-server SSE"
+        echo "  --live [SSE_URL]         Live from SSE event stream"
         echo "  --replay <file.ndjson>   Replay a saved NDJSON log"
         echo "  \"request text\"           Run orchestrator + visualize"
         ;;

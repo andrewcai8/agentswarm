@@ -125,12 +125,11 @@ describe("config", () => {
       () => {
         const config = loadConfig();
         assert.strictEqual(config.llm.endpoints.length, 1);
-        assert.strictEqual(
-          config.llm.endpoints[0].endpoint,
-          "https://pod-abc123-8000.proxy.runpod.net",
-        );
-        assert.strictEqual(config.llm.endpoints[0].name, "default");
-        assert.strictEqual(config.llm.endpoints[0].weight, 100);
+        const endpoint = config.llm.endpoints[0];
+        assert.ok(endpoint);
+        assert.strictEqual(endpoint.endpoint, "https://pod-abc123-8000.proxy.runpod.net");
+        assert.strictEqual(endpoint.name, "default");
+        assert.strictEqual(endpoint.weight, 100);
       },
     );
   });
@@ -143,12 +142,25 @@ describe("config", () => {
     withEnv({ GIT_REPO_URL: REQUIRED_ENV.GIT_REPO_URL, LLM_ENDPOINTS: endpoints }, () => {
       const config = loadConfig();
       assert.strictEqual(config.llm.endpoints.length, 2);
-      assert.strictEqual(config.llm.endpoints[0].name, "modal-b200");
-      assert.strictEqual(config.llm.endpoints[0].endpoint, "https://modal.example.com");
-      assert.strictEqual(config.llm.endpoints[0].weight, 65);
-      assert.strictEqual(config.llm.endpoints[1].name, "runpod-h200");
-      assert.strictEqual(config.llm.endpoints[1].apiKey, "key123");
-      assert.strictEqual(config.llm.endpoints[1].weight, 35);
+      const firstEndpoint = config.llm.endpoints[0];
+      const secondEndpoint = config.llm.endpoints[1];
+      assert.ok(firstEndpoint);
+      assert.ok(secondEndpoint);
+      assert.strictEqual(firstEndpoint.name, "modal-b200");
+      assert.strictEqual(firstEndpoint.endpoint, "https://modal.example.com");
+      assert.strictEqual(firstEndpoint.weight, 65);
+      assert.strictEqual(secondEndpoint.name, "runpod-h200");
+      assert.strictEqual(secondEndpoint.apiKey, "key123");
+      assert.strictEqual(secondEndpoint.weight, 35);
+    });
+  });
+
+  it("throws when LLM_ENDPOINTS is an empty array", () => {
+    withEnv({ GIT_REPO_URL: REQUIRED_ENV.GIT_REPO_URL, LLM_ENDPOINTS: "[]" }, () => {
+      assert.throws(
+        () => loadConfig(),
+        (err: Error) => err.message.includes("LLM_ENDPOINTS must contain at least one endpoint"),
+      );
     });
   });
 
@@ -159,14 +171,18 @@ describe("config", () => {
     withEnv({ ...REQUIRED_ENV, LLM_ENDPOINTS: endpoints }, () => {
       const config = loadConfig();
       assert.strictEqual(config.llm.endpoints.length, 1);
-      assert.strictEqual(config.llm.endpoints[0].name, "primary");
+      const endpoint = config.llm.endpoints[0];
+      assert.ok(endpoint);
+      assert.strictEqual(endpoint.name, "primary");
     });
   });
 
   it("LLM_API_KEY is attached to single endpoint from LLM_BASE_URL", () => {
     withEnv({ ...REQUIRED_ENV, LLM_API_KEY: "my-secret-key" }, () => {
       const config = loadConfig();
-      assert.strictEqual(config.llm.endpoints[0].apiKey, "my-secret-key");
+      const endpoint = config.llm.endpoints[0];
+      assert.ok(endpoint);
+      assert.strictEqual(endpoint.apiKey, "my-secret-key");
     });
   });
 
@@ -205,6 +221,20 @@ describe("config", () => {
       const config = loadConfig();
       assert.strictEqual(typeof config.maxWorkers, "number");
       assert.strictEqual(config.maxWorkers, 8);
+    });
+  });
+
+  it("clamps MAX_WORKERS to minimum of 1", () => {
+    withEnv({ ...REQUIRED_ENV, MAX_WORKERS: "0" }, () => {
+      const config = loadConfig();
+      assert.strictEqual(config.maxWorkers, 1);
+    });
+  });
+
+  it("uses default worker timeout when WORKER_TIMEOUT is non-positive", () => {
+    withEnv({ ...REQUIRED_ENV, WORKER_TIMEOUT: "0" }, () => {
+      const config = loadConfig();
+      assert.strictEqual(config.workerTimeout, 1800);
     });
   });
 

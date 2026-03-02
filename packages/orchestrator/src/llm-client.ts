@@ -52,6 +52,33 @@ interface ChatCompletionResponse {
   };
 }
 
+function isChatCompletionResponse(value: unknown): value is ChatCompletionResponse {
+  if (typeof value !== "object" || value === null || !("choices" in value)) {
+    return false;
+  }
+
+  const choices = value.choices;
+  if (!Array.isArray(choices)) {
+    return false;
+  }
+
+  for (const choice of choices) {
+    if (
+      typeof choice !== "object" ||
+      choice === null ||
+      !("message" in choice) ||
+      typeof choice.message !== "object" ||
+      choice.message === null ||
+      !("content" in choice.message) ||
+      typeof choice.message.content !== "string"
+    ) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
 interface EndpointState {
   config: LLMEndpoint;
   effectiveWeight: number;
@@ -74,7 +101,7 @@ export class LLMClient {
   private requestCounter: number = 0;
 
   constructor(config: LLMClientConfig | LLMClientSingleConfig) {
-    if ("endpoint" in config && !("endpoints" in config)) {
+    if ("endpoint" in config) {
       this.config = {
         endpoints: [
           {
@@ -90,7 +117,7 @@ export class LLMClient {
         timeoutMs: config.timeoutMs,
       };
     } else {
-      this.config = config as LLMClientConfig;
+      this.config = config;
     }
 
     if (this.config.endpoints.length === 0) {
@@ -135,6 +162,10 @@ export class LLMClient {
 
     for (let attemptIndex = 0; attemptIndex < orderedEndpoints.length; attemptIndex++) {
       const state = orderedEndpoints[attemptIndex];
+      if (!state) {
+        continue;
+      }
+
       try {
         const result = await this.sendRequest(state, messages, overrides, span);
 
@@ -213,14 +244,24 @@ export class LLMClient {
 
       let selectedIdx = 0;
       for (let i = 0; i < remaining.length; i++) {
-        pick -= remaining[i].effectiveWeight;
+        const candidate = remaining[i];
+        if (!candidate) {
+          continue;
+        }
+
+        pick -= candidate.effectiveWeight;
         if (pick <= 0) {
           selectedIdx = i;
           break;
         }
       }
 
-      result.push(remaining[selectedIdx]);
+      const selected = remaining[selectedIdx];
+      if (!selected) {
+        break;
+      }
+
+      result.push(selected);
       remaining.splice(selectedIdx, 1);
     }
 
@@ -281,7 +322,17 @@ export class LLMClient {
         );
       }
 
-      const data = (await response.json()) as ChatCompletionResponse;
+      const dataRaw: unknown = await response.json();
+      if (!isChatCompletionResponse(dataRaw)) {
+        throw new Error(`Invalid LLM response shape from ${state.config.name}`);
+      }
+
+      const data = dataRaw;
+      const firstChoice = data.choices.at(0);
+      if (!firstChoice) {
+        throw new Error(`LLM response from ${state.config.name} did not contain any choices`);
+      }
+
       const latencyMs = Date.now() - startMs;
 
       this.recordSuccess(state, latencyMs);
@@ -289,9 +340,9 @@ export class LLMClient {
       logger.debug("LLM response received", {
         endpoint: state.config.name,
         latencyMs,
-        finishReason: data.choices[0].finish_reason,
-        contentLength: data.choices[0].message.content.length,
-        contentPreview: data.choices[0].message.content.slice(0, 200),
+        finishReason: firstChoice.finish_reason,
+        contentLength: firstChoice.message.content.length,
+        contentPreview: firstChoice.message.content.slice(0, 200),
         promptTokens: data.usage?.prompt_tokens ?? 0,
         completionTokens: data.usage?.completion_tokens ?? 0,
       });
@@ -301,7 +352,7 @@ export class LLMClient {
           promptTokens: data.usage?.prompt_tokens ?? 0,
           completionTokens: data.usage?.completion_tokens ?? 0,
           totalTokens: data.usage?.total_tokens ?? 0,
-          finishReason: data.choices[0].finish_reason ?? "unknown",
+          finishReason: firstChoice.finish_reason ?? "unknown",
           latencyMs,
           endpoint: state.config.name,
         });
@@ -310,18 +361,18 @@ export class LLMClient {
 
         writeLLMDetail(requestSpan.spanId, {
           messages,
-          response: data.choices[0].message.content,
+          response: firstChoice.message.content,
         });
       }
 
       return {
-        content: data.choices[0].message.content,
+        content: firstChoice.message.content,
         usage: {
           promptTokens: data.usage?.prompt_tokens ?? 0,
           completionTokens: data.usage?.completion_tokens ?? 0,
           totalTokens: data.usage?.total_tokens ?? 0,
         },
-        finishReason: data.choices[0].finish_reason ?? "unknown",
+        finishReason: firstChoice.finish_reason ?? "unknown",
         endpoint: state.config.name,
         latencyMs,
       };

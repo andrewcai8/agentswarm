@@ -9,6 +9,5 @@ export {
   Logger,
   setLogLevel,
 } from "./logger.js";
-export * from "./protocol.js";
 export * from "./tracer.js";
 export * from "./types.js";

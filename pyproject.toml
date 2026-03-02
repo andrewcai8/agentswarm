@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "longshot"
 version = "0.1.0"
@@ -7,6 +11,13 @@ requires-python = ">=3.12"
 dependencies = [
     "rich>=14.3.2",
 ]
+
+[project.scripts]
+longshot = "main:main"
+
+[tool.setuptools]
+py-modules = ["main", "dashboard"]
+include-package-data = true
 
 
 [tool.ruff]

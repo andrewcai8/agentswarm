@@ -75,31 +75,38 @@ fi_cache_vol = modal.Volume.from_name("flashinfer-cache-glm5", create_if_missing
 
 USE_DUMMY_WEIGHTS = os.environ.get("APP_USE_DUMMY_WEIGHTS", "0") == "1"
 
-image = image.env({
-    "HF_XET_HIGH_PERFORMANCE": "1",
-    "APP_USE_DUMMY_WEIGHTS": str(int(USE_DUMMY_WEIGHTS)),
-    "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
-    "SGLANG_JIT_DEEPGEMM_FAST_WARMUP": "1",
-    "SGLANG_NSA_FORCE_MLA": "1",
-    "SGLANG_LOCAL_IP_NIC": "overlay0",
-    # Pre-set FlashInfer cache dir so JIT kernels persist across restarts
-    "FLASHINFER_CACHE_DIR": "/root/.cache/flashinfer",
-    # Reduce CUDA memory fragmentation — reclaimed ~5GB reserved-but-unused per GPU
-    "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
-})
+image = image.env(
+    {
+        "HF_XET_HIGH_PERFORMANCE": "1",
+        "APP_USE_DUMMY_WEIGHTS": str(int(USE_DUMMY_WEIGHTS)),
+        "SGLANG_ALLOW_OVERWRITE_LONGER_CONTEXT_LEN": "1",
+        "SGLANG_JIT_DEEPGEMM_FAST_WARMUP": "1",
+        "SGLANG_NSA_FORCE_MLA": "1",
+        "SGLANG_LOCAL_IP_NIC": "overlay0",
+        # Pre-set FlashInfer cache dir so JIT kernels persist across restarts
+        "FLASHINFER_CACHE_DIR": "/root/.cache/flashinfer",
+        # Reduce CUDA memory fragmentation — reclaimed ~5GB reserved-but-unused per GPU
+        "PYTORCH_CUDA_ALLOC_CONF": "expandable_segments:True",
+    }
+)
 
 # Pass through any local SGLANG env vars for experimentation
 image = image.env(
-    {key: value for key, value in os.environ.items()
-     if key.startswith("SGL_") or key.startswith("SGLANG_")}
+    {
+        key: value
+        for key, value in os.environ.items()
+        if key.startswith("SGL_") or key.startswith("SGLANG_")
+    }
 )
 
 
 hf_secret = modal.Secret.from_name("huggingface")
 
 if not USE_DUMMY_WEIGHTS:
+
     def _download_model(repo_id, revision=None):
         from huggingface_hub import snapshot_download
+
         snapshot_download(repo_id=repo_id, revision=revision)
 
     image = image.run_function(
@@ -121,17 +128,26 @@ if modal.is_local():
 # SGLANG SERVER
 # =============================================================================
 
+
 def _start_server() -> subprocess.Popen:
     cmd = [
         f"HF_HUB_OFFLINE={1 - int(USE_DUMMY_WEIGHTS)}",
-        "python", "-m", "sglang.launch_server",
-        "--host", "0.0.0.0",
-        "--port", str(SGLANG_PORT),
-        "--model-path", REPO_ID,
-        "--served-model-name", SERVED_MODEL_NAME,
-        "--tp", str(GPU_COUNT),
+        "python",
+        "-m",
+        "sglang.launch_server",
+        "--host",
+        "0.0.0.0",
+        "--port",
+        str(SGLANG_PORT),
+        "--model-path",
+        REPO_ID,
+        "--served-model-name",
+        SERVED_MODEL_NAME,
+        "--tp",
+        str(GPU_COUNT),
         "--disable-custom-all-reduce",
-        "--config", "/root/config.yaml",
+        "--config",
+        "/root/config.yaml",
     ]
 
     if USE_DUMMY_WEIGHTS:
@@ -217,6 +233,7 @@ class GLM5:
 # TEST ENTRYPOINT
 # =============================================================================
 
+
 @app.local_entrypoint()
 async def test(test_timeout=60 * MINUTES, content=None, twice=True):
     url = GLM5._experimental_get_flash_urls()[0]
@@ -250,7 +267,7 @@ async def _probe(url: str, messages: list, timeout: int = 60 * MINUTES) -> None:
             try:
                 await _send_streaming(session, messages)
                 return
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 await asyncio.sleep(1)
             except aiohttp.client_exceptions.ClientResponseError as e:
                 if e.status in (502, 503):  # 502/503 during startup
@@ -284,7 +301,7 @@ async def _send_streaming(
             if not line.startswith("data:"):
                 continue
 
-            data = line[len("data:"):].strip()
+            data = line[len("data:") :].strip()
             if data == "[DONE]":
                 break
 

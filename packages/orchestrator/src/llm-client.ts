@@ -1,3 +1,5 @@
+/** @module Multi-endpoint LLM client with weighted routing, latency-adaptive balancing, and health tracking */
+
 import { createLogger, type LLMEndpoint, type Span, writeLLMDetail } from "@longshot/core";
 
 const logger = createLogger("llm-client", "root-planner");
@@ -18,7 +20,6 @@ export interface LLMResponse {
   endpoint: string;
   latencyMs: number;
 }
-
 
 export interface LLMClientConfig {
   endpoints: LLMEndpoint[];
@@ -114,12 +115,16 @@ export class LLMClient {
   async complete(
     messages: LLMMessage[],
     overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>,
-    parentSpan?: Span
+    parentSpan?: Span,
   ): Promise<LLMResponse> {
     const orderedEndpoints = this.selectEndpoints();
     let lastError: Error | null = null;
 
-    logger.debug("LLM request starting", { endpointOrder: orderedEndpoints.map(e => e.config.name), model: overrides?.model ?? this.config.model, messageCount: messages.length });
+    logger.debug("LLM request starting", {
+      endpointOrder: orderedEndpoints.map((e) => e.config.name),
+      model: overrides?.model ?? this.config.model,
+      messageCount: messages.length,
+    });
 
     const span = parentSpan?.child("llm.complete", { agentId: "llm-client" });
     span?.setAttributes({
@@ -163,7 +168,7 @@ export class LLMClient {
     span?.end();
 
     throw new Error(
-      `All ${this.config.endpoints.length} LLM endpoints failed. Last error: ${lastError?.message}`
+      `All ${this.config.endpoints.length} LLM endpoints failed. Last error: ${lastError?.message}`,
     );
   }
 
@@ -182,9 +187,13 @@ export class LLMClient {
     const unhealthy = this.states.filter((s) => !s.healthy);
 
     logger.debug("Endpoint selection", {
-      healthy: healthy.map(s => s.config.name),
-      unhealthy: unhealthy.map(s => s.config.name),
-      order: [...this.weightedSort(healthy), ...unhealthy].map(s => ({ name: s.config.name, weight: Math.round(s.effectiveWeight * 10) / 10, latency: Math.round(s.avgLatencyMs) })),
+      healthy: healthy.map((s) => s.config.name),
+      unhealthy: unhealthy.map((s) => s.config.name),
+      order: [...this.weightedSort(healthy), ...unhealthy].map((s) => ({
+        name: s.config.name,
+        weight: Math.round(s.effectiveWeight * 10) / 10,
+        latency: Math.round(s.avgLatencyMs),
+      })),
     });
 
     return [...this.weightedSort(healthy), ...unhealthy];
@@ -222,7 +231,7 @@ export class LLMClient {
     state: EndpointState,
     messages: LLMMessage[],
     overrides?: Partial<Pick<LLMClientConfig, "model" | "temperature" | "maxTokens">>,
-    parentSpan?: Span
+    parentSpan?: Span,
   ): Promise<LLMResponse> {
     const startMs = Date.now();
     state.totalRequests++;
@@ -267,7 +276,9 @@ export class LLMClient {
 
       if (!response.ok) {
         const body = await response.text();
-        throw new Error(`LLM request failed (${response.status}) from ${state.config.name}: ${body}`);
+        throw new Error(
+          `LLM request failed (${response.status}) from ${state.config.name}: ${body}`,
+        );
       }
 
       const data = (await response.json()) as ChatCompletionResponse;
@@ -350,9 +361,12 @@ export class LLMClient {
 
     if (state.consecutiveFailures >= UNHEALTHY_THRESHOLD) {
       state.healthy = false;
-      logger.warn(`Endpoint ${state.config.name} marked unhealthy after ${state.consecutiveFailures} consecutive failures`, {
-        lastError: error.message,
-      });
+      logger.warn(
+        `Endpoint ${state.config.name} marked unhealthy after ${state.consecutiveFailures} consecutive failures`,
+        {
+          lastError: error.message,
+        },
+      );
     }
   }
 
@@ -373,7 +387,12 @@ export class LLMClient {
     }
 
     logger.debug("Endpoint weights rebalanced", {
-      weights: healthyWithLatency.map(s => ({ name: s.config.name, baseWeight: s.config.weight, effectiveWeight: Math.round(s.effectiveWeight * 10) / 10, avgLatencyMs: Math.round(s.avgLatencyMs) })),
+      weights: healthyWithLatency.map((s) => ({
+        name: s.config.name,
+        baseWeight: s.config.weight,
+        effectiveWeight: Math.round(s.effectiveWeight * 10) / 10,
+        avgLatencyMs: Math.round(s.avgLatencyMs),
+      })),
     });
   }
 

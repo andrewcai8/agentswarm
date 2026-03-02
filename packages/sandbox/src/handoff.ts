@@ -1,3 +1,5 @@
+/** @module Handoff construction utilities for packaging worker results with git diff statistics */
+
 import { execSync } from "node:child_process";
 import type { Handoff } from "@longshot/core";
 
@@ -5,10 +7,10 @@ export function buildHandoff(
   taskId: string,
   status: Handoff["status"],
   summary: string,
-  metrics: Handoff["metrics"]
+  metrics: Handoff["metrics"],
 ): Handoff {
   const diffStat = getGitDiffStat();
-  
+
   return {
     taskId,
     status,

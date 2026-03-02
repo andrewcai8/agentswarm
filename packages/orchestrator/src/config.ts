@@ -1,3 +1,5 @@
+/** @module Environment-driven configuration loader with typed defaults and validation */
+
 import type { HarnessConfig, LLMEndpoint } from "@longshot/core";
 
 export interface FinalizationConfig {
@@ -60,7 +62,7 @@ function parseEndpoints(): LLMEndpoint[] {
   }
 
   throw new Error(
-    "Missing required env: LLM_ENDPOINTS (JSON array) or LLM_BASE_URL (single endpoint)"
+    "Missing required env: LLM_ENDPOINTS (JSON array) or LLM_BASE_URL (single endpoint)",
   );
 }
 
@@ -75,21 +77,23 @@ export function loadConfig(): OrchestratorConfig {
   }
 
   const mergeStrategy = process.env.MERGE_STRATEGY || "rebase";
-  if (!ALLOWED_MERGE_STRATEGIES.includes(mergeStrategy as typeof ALLOWED_MERGE_STRATEGIES[number])) {
+  if (
+    !ALLOWED_MERGE_STRATEGIES.includes(mergeStrategy as (typeof ALLOWED_MERGE_STRATEGIES)[number])
+  ) {
     throw new Error(
-      `Invalid mergeStrategy: ${mergeStrategy}. Must be one of: ${ALLOWED_MERGE_STRATEGIES.join(", ")}`
+      `Invalid mergeStrategy: ${mergeStrategy}. Must be one of: ${ALLOWED_MERGE_STRATEGIES.join(", ")}`,
     );
   }
 
   cachedConfig = {
-    maxWorkers: ((v) => Number.isFinite(v) ? v : 50)(Number(process.env.MAX_WORKERS)),
-    workerTimeout: ((v) => Number.isFinite(v) ? v : 1800)(Number(process.env.WORKER_TIMEOUT)),
+    maxWorkers: ((v) => (Number.isFinite(v) ? v : 50))(Number(process.env.MAX_WORKERS)),
+    workerTimeout: ((v) => (Number.isFinite(v) ? v : 1800))(Number(process.env.WORKER_TIMEOUT)),
     mergeStrategy: mergeStrategy as "fast-forward" | "rebase" | "merge-commit",
     llm: {
       endpoints,
       model: process.env.LLM_MODEL || "glm-5",
-      maxTokens: ((v) => Number.isFinite(v) ? v : 65536)(Number(process.env.LLM_MAX_TOKENS)),
-      temperature: ((v) => Number.isFinite(v) ? v : 0.7)(Number(process.env.LLM_TEMPERATURE)),
+      maxTokens: ((v) => (Number.isFinite(v) ? v : 65536))(Number(process.env.LLM_MAX_TOKENS)),
+      temperature: ((v) => (Number.isFinite(v) ? v : 0.7))(Number(process.env.LLM_TEMPERATURE)),
       timeoutMs: process.env.LLM_TIMEOUT_MS ? Number(process.env.LLM_TIMEOUT_MS) : undefined,
     },
     git: {
@@ -99,20 +103,28 @@ export function loadConfig(): OrchestratorConfig {
     },
     sandbox: {
       imageTag: process.env.SANDBOX_IMAGE_TAG || "latest",
-      cpuCores: ((v) => Number.isFinite(v) ? v : 4)(Number(process.env.SANDBOX_CPU_CORES)),
-      memoryMb: ((v) => Number.isFinite(v) ? v : 8192)(Number(process.env.SANDBOX_MEMORY_MB)),
-      idleTimeout: ((v) => Number.isFinite(v) ? v : 300)(Number(process.env.SANDBOX_IDLE_TIMEOUT)),
+      cpuCores: ((v) => (Number.isFinite(v) ? v : 4))(Number(process.env.SANDBOX_CPU_CORES)),
+      memoryMb: ((v) => (Number.isFinite(v) ? v : 8192))(Number(process.env.SANDBOX_MEMORY_MB)),
+      idleTimeout: ((v) => (Number.isFinite(v) ? v : 300))(
+        Number(process.env.SANDBOX_IDLE_TIMEOUT),
+      ),
     },
     targetRepoPath: process.env.TARGET_REPO_PATH || "./target-repo",
     pythonPath: process.env.PYTHON_PATH || "python3",
-    healthCheckInterval: ((v) => Number.isFinite(v) ? v : 10)(Number(process.env.HEALTH_CHECK_INTERVAL)),
+    healthCheckInterval: ((v) => (Number.isFinite(v) ? v : 10))(
+      Number(process.env.HEALTH_CHECK_INTERVAL),
+    ),
     readinessTimeoutMs: process.env.LLM_READINESS_TIMEOUT_MS
       ? Number(process.env.LLM_READINESS_TIMEOUT_MS)
       : 120_000,
     finalization: {
-      maxAttempts: ((v) => Number.isFinite(v) ? v : 3)(Number(process.env.FINALIZATION_MAX_ATTEMPTS)),
+      maxAttempts: ((v) => (Number.isFinite(v) ? v : 3))(
+        Number(process.env.FINALIZATION_MAX_ATTEMPTS),
+      ),
       enabled: process.env.FINALIZATION_ENABLED !== "false",
-      sweepTimeoutMs: ((v) => Number.isFinite(v) ? v : 120_000)(Number(process.env.FINALIZATION_SWEEP_TIMEOUT_MS)),
+      sweepTimeoutMs: ((v) => (Number.isFinite(v) ? v : 120_000))(
+        Number(process.env.FINALIZATION_SWEEP_TIMEOUT_MS),
+      ),
     },
   };
 

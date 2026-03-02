@@ -1,3 +1,5 @@
+/** @module Async git utilities for branch management, merging, diffing, and repository inspection */
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
@@ -45,7 +47,10 @@ function getCwd(cwd?: string): string {
 async function getConflictingFilesFromStatus(cwd: string): Promise<string[]> {
   try {
     const { stdout } = await execFileAsync("git", ["status", "--porcelain"], { cwd });
-    const lines = stdout.trim().split("\n").filter((line) => line.length > 0);
+    const lines = stdout
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
     const conflicts: string[] = [];
 
     for (const line of lines) {
@@ -98,7 +103,7 @@ export async function mergeBranch(
   source: string,
   target?: string,
   strategy?: "fast-forward" | "rebase" | "merge-commit",
-  cwd?: string
+  cwd?: string,
 ): Promise<MergeResult> {
   const workDir = getCwd(cwd);
 
@@ -159,7 +164,11 @@ export async function mergeBranch(
 
       case "rebase": {
         // Clean up stale rebase state from a previous interrupted operation
-        try { await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir }); } catch { /* no stale rebase */ }
+        try {
+          await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
+        } catch {
+          /* no stale rebase */
+        }
 
         const tmpBranch = `tmp-rebase-${Date.now()}`;
         try {
@@ -180,7 +189,9 @@ export async function mergeBranch(
           // Clean up temp branch
           try {
             await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
-          } catch { /* best effort cleanup */ }
+          } catch {
+            /* best effort cleanup */
+          }
           return {
             success: true,
             message: `Successfully rebased ${source} onto ${targetBranch}`,
@@ -189,9 +200,21 @@ export async function mergeBranch(
           const errMsg = error instanceof Error ? error.message : String(error);
           if (errMsg.includes("could not apply") || errMsg.includes("CONFLICT")) {
             const conflictingFiles = await getConflictingFilesFromStatus(workDir);
-            try { await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir }); } catch { /* ignore */ }
-            try { await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir }); } catch { /* ignore */ }
-            try { await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir }); } catch { /* ignore */ }
+            try {
+              await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
+            } catch {
+              /* ignore */
+            }
+            try {
+              await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir });
+            } catch {
+              /* ignore */
+            }
+            try {
+              await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
+            } catch {
+              /* ignore */
+            }
             return {
               success: false,
               conflicted: true,
@@ -200,9 +223,21 @@ export async function mergeBranch(
             };
           }
           // Non-conflict failure — abort any in-progress rebase before cleanup
-          try { await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir }); } catch { /* ignore */ }
-          try { await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir }); } catch { /* ignore */ }
-          try { await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir }); } catch { /* ignore */ }
+          try {
+            await execFileAsync("git", ["rebase", "--abort"], { cwd: workDir });
+          } catch {
+            /* ignore */
+          }
+          try {
+            await execFileAsync("git", ["checkout", currentBranch], { cwd: workDir });
+          } catch {
+            /* ignore */
+          }
+          try {
+            await execFileAsync("git", ["branch", "-D", tmpBranch], { cwd: workDir });
+          } catch {
+            /* ignore */
+          }
           throw error;
         }
       }
@@ -247,7 +282,11 @@ export async function mergeBranch(
 }
 
 // 4. Rebase branch onto another
-export async function rebaseBranch(branchName: string, onto: string, cwd?: string): Promise<RebaseResult> {
+export async function rebaseBranch(
+  branchName: string,
+  onto: string,
+  cwd?: string,
+): Promise<RebaseResult> {
   const workDir = getCwd(cwd);
   try {
     // First checkout the branch we want to rebase
@@ -334,7 +373,7 @@ export async function getRecentCommits(count: number, cwd?: string): Promise<Com
     const { stdout } = await execFileAsync(
       "git",
       ["log", `-${count}`, `--format=${SEP}%H%n%s%n%an%n%at`],
-      { cwd: workDir }
+      { cwd: workDir },
     );
 
     const trimmed = stdout.trim();
@@ -369,7 +408,10 @@ export async function getFileTree(cwd?: string, maxDepth?: number): Promise<stri
   const workDir = getCwd(cwd);
   try {
     const { stdout } = await execFileAsync("git", ["ls-files"], { cwd: workDir });
-    const files = stdout.trim().split("\n").filter((line) => line.length > 0);
+    const files = stdout
+      .trim()
+      .split("\n")
+      .filter((line) => line.length > 0);
 
     if (maxDepth !== undefined && maxDepth > 0) {
       return files.filter((file) => {

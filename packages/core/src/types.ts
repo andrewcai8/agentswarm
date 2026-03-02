@@ -1,3 +1,5 @@
+/** @module Shared domain types for the Longshot multi-agent system */
+
 // Task status
 export type TaskStatus = "pending" | "assigned" | "running" | "complete" | "failed" | "cancelled";
 
@@ -6,31 +8,31 @@ export type AgentRole = "root-planner" | "subplanner" | "worker" | "reconciler";
 
 // A task assigned by a planner to a worker
 export interface Task {
-  id: string;                    // Unique task ID (uuid)
-  parentId?: string;             // Parent task ID (if subtask)
-  description: string;           // What to do (natural language)
-  scope: string[];              // File paths the worker should focus on
-  acceptance: string;           // How to know when done (natural language)
-  branch: string;               // Git branch name for this task
+  id: string; // Unique task ID (uuid)
+  parentId?: string; // Parent task ID (if subtask)
+  description: string; // What to do (natural language)
+  scope: string[]; // File paths the worker should focus on
+  acceptance: string; // How to know when done (natural language)
+  branch: string; // Git branch name for this task
   status: TaskStatus;
-  assignedTo?: string;           // Sandbox ID
-  createdAt: number;            // Unix timestamp ms
+  assignedTo?: string; // Sandbox ID
+  createdAt: number; // Unix timestamp ms
   startedAt?: number;
   completedAt?: number;
-  priority: number;              // 1 (highest) to 10 (lowest)
+  priority: number; // 1 (highest) to 10 (lowest)
   conflictSourceBranch?: string; // Original branch that conflicted (for conflict-fix tasks)
-  retryCount?: number;           // How many times this task has been retried (0 = first attempt)
+  retryCount?: number; // How many times this task has been retried (0 = first attempt)
 }
 
 // Handoff report from worker back to planner
 export interface Handoff {
   taskId: string;
   status: "complete" | "partial" | "blocked" | "failed";
-  summary: string;               // What was done
-  diff: string;                 // Git diff output
-  filesChanged: string[];       // List of changed file paths
-  concerns: string[];           // Issues discovered
-  suggestions: string[];        // Recommendations for planner
+  summary: string; // What was done
+  diff: string; // Git diff output
+  filesChanged: string[]; // List of changed file paths
+  concerns: string[]; // Issues discovered
+  suggestions: string[]; // Recommendations for planner
   metrics: {
     linesAdded: number;
     linesRemoved: number;
@@ -49,12 +51,12 @@ export interface SandboxStatus {
   sandboxId: string;
   status: "starting" | "ready" | "working" | "completing" | "terminated" | "error";
   taskId?: string;
-  progress?: string;             // Current activity description
+  progress?: string; // Current activity description
   healthCheck: {
-    lastPing: number;           // Unix timestamp ms
+    lastPing: number; // Unix timestamp ms
     consecutiveFailures: number;
   };
-  url?: string;                  // Tunnel URL for HTTP access
+  url?: string; // Tunnel URL for HTTP access
 }
 
 export interface LLMEndpoint {

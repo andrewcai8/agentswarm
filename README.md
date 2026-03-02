@@ -1,5 +1,7 @@
 # Longshot
 
+[![CI](https://github.com/andrewcai8/longshot/actions/workflows/ci.yml/badge.svg)](https://github.com/andrewcai8/longshot/actions/workflows/ci.yml)
+
 Massively parallel autonomous coding: decompose any project into hundreds of tasks and execute them simultaneously in isolated cloud sandboxes.
 
 ## What it does

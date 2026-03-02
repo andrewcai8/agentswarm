@@ -1,6 +1,8 @@
-import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
+/** @module Structured NDJSON logger with dual stdout/file output and per-agent context tagging */
+
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { resolve } from "node:path";
-import { LogEntry, AgentRole } from "./types.js";
+import type { AgentRole, LogEntry } from "./types.js";
 
 // ---------------------------------------------------------------------------
 // Log level ordering — lower number = more verbose
@@ -97,7 +99,7 @@ export class Logger {
   constructor(
     private agentId: string,
     private agentRole: AgentRole,
-    private taskId?: string
+    private taskId?: string,
   ) {}
 
   withTask(taskId: string): Logger {

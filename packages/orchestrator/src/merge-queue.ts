@@ -1,11 +1,13 @@
+/** @module Serial merge queue with priority ordering, conflict retry, and rebase-based integration */
+
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { HarnessConfig, Tracer, Span } from "@longshot/core";
+import type { HarnessConfig, Span, Tracer } from "@longshot/core";
 import {
   checkoutBranch,
   mergeBranch as coreMergeBranch,
-  rebaseBranch,
   createLogger,
+  rebaseBranch,
 } from "@longshot/core";
 import type { GitMutex } from "./shared.js";
 
@@ -59,19 +61,41 @@ async function ensureCleanState(mainBranch: string, cwd: string): Promise<void> 
   // 1. Abort any in-progress operation
   await abortMerge(cwd);
   // 2. Hard-reset to discard any dirty index / working-tree changes
-  try { await execFileAsync("git", ["reset", "--hard", "HEAD"], { cwd }); } catch { /* best effort */ }
+  try {
+    await execFileAsync("git", ["reset", "--hard", "HEAD"], { cwd });
+  } catch {
+    /* best effort */
+  }
   // 3. Remove untracked files left by temp branches or partial merges
-  try { await execFileAsync("git", ["clean", "-fd"], { cwd }); } catch { /* best effort */ }
+  try {
+    await execFileAsync("git", ["clean", "-fd"], { cwd });
+  } catch {
+    /* best effort */
+  }
   // 4. Delete any leftover retry-rebase-* temp branches
   try {
     const { stdout } = await execFileAsync("git", ["branch", "--list", "retry-rebase-*"], { cwd });
-    const branches = stdout.trim().split("\n").map(b => b.trim()).filter(Boolean);
+    const branches = stdout
+      .trim()
+      .split("\n")
+      .map((b) => b.trim())
+      .filter(Boolean);
     for (const branch of branches) {
-      try { await execFileAsync("git", ["branch", "-D", branch], { cwd }); } catch { /* best effort */ }
+      try {
+        await execFileAsync("git", ["branch", "-D", branch], { cwd });
+      } catch {
+        /* best effort */
+      }
     }
-  } catch { /* best effort */ }
+  } catch {
+    /* best effort */
+  }
   // 5. Get back to main
-  try { await execFileAsync("git", ["checkout", mainBranch], { cwd }); } catch { /* best effort */ }
+  try {
+    await execFileAsync("git", ["checkout", mainBranch], { cwd });
+  } catch {
+    /* best effort */
+  }
 }
 
 const logger = createLogger("merge-queue", "root-planner");
@@ -146,7 +170,9 @@ export class MergeQueue {
     }
 
     this.queue.push({ branch, priority, enqueuedAt: Date.now() });
-    this.queue.sort((a, b) => a.priority !== b.priority ? a.priority - b.priority : a.enqueuedAt - b.enqueuedAt);
+    this.queue.sort((a, b) =>
+      a.priority !== b.priority ? a.priority - b.priority : a.enqueuedAt - b.enqueuedAt,
+    );
     logger.debug(`Enqueued branch ${branch}`, { priority });
   }
 
@@ -174,7 +200,10 @@ export class MergeQueue {
 
     const tick = async (): Promise<void> => {
       if (!this.backgroundRunning) return;
-      logger.debug("Merge queue tick", { queueLength: this.queue.length, mergedCount: this.merged.size });
+      logger.debug("Merge queue tick", {
+        queueLength: this.queue.length,
+        mergedCount: this.merged.size,
+      });
 
       try {
         while (this.queue.length > 0 && this.backgroundRunning) {
@@ -258,7 +287,9 @@ export class MergeQueue {
         await execFileAsync("git", ["fetch", "origin", branch], { cwd });
       } catch (fetchError) {
         const fetchMsg = fetchError instanceof Error ? fetchError.message : String(fetchError);
-        logger.warn(`Failed to fetch branch ${branch} from origin, trying local`, { error: fetchMsg });
+        logger.warn(`Failed to fetch branch ${branch} from origin, trying local`, {
+          error: fetchMsg,
+        });
       }
       logger.debug("Fetch completed for branch", { branch, taskId });
 
@@ -269,7 +300,11 @@ export class MergeQueue {
       // remote tracking counterparts — it only checks refs/heads/. We must use the
       // explicit origin/ prefix so git resolves refs/remotes/origin/<branch>.
       const mergeRef = `origin/${branch}`;
-      logger.debug("Attempting merge", { mergeRef, mainBranch: this.mainBranch, strategy: this.mergeStrategy });
+      logger.debug("Attempting merge", {
+        mergeRef,
+        mainBranch: this.mainBranch,
+        strategy: this.mergeStrategy,
+      });
       const mergeStartMs = Date.now();
       let result = await coreMergeBranch(mergeRef, this.mainBranch, this.mergeStrategy, cwd);
 
@@ -336,15 +371,25 @@ export class MergeQueue {
           let rebased = false;
           try {
             const localBranch = `retry-rebase-${Date.now()}`;
-            await execFileAsync("git", ["checkout", "-b", localBranch, `origin/${branch}`], { cwd });
+            await execFileAsync("git", ["checkout", "-b", localBranch, `origin/${branch}`], {
+              cwd,
+            });
             const rebaseResult = await rebaseBranch(localBranch, this.mainBranch, cwd);
             if (rebaseResult.success) {
-              await execFileAsync("git", ["push", "origin", `${localBranch}:${branch}`, "--force"], { cwd });
+              await execFileAsync(
+                "git",
+                ["push", "origin", `${localBranch}:${branch}`, "--force"],
+                { cwd },
+              );
               rebased = true;
               logger.info("Rebased branch onto latest main before retry", { branch, taskId });
             }
             await ensureCleanState(this.mainBranch, cwd);
-            try { await execFileAsync("git", ["branch", "-D", localBranch], { cwd }); } catch { /* best effort */ }
+            try {
+              await execFileAsync("git", ["branch", "-D", localBranch], { cwd });
+            } catch {
+              /* best effort */
+            }
           } catch {
             await ensureCleanState(this.mainBranch, cwd);
           }

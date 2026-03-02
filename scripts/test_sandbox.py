@@ -10,10 +10,11 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(REPO_ROOT))
 
-import modal
-import aiohttp
+import aiohttp  # noqa: E402
+import modal  # noqa: E402
 
-from infra.sandbox_image import create_agent_image, create_worker_image
+from infra.sandbox_image import create_agent_image, create_worker_image  # noqa: E402
+
 
 def test_image_builds():
     """Verify the sandbox image builds and has all required tools."""
@@ -26,7 +27,9 @@ def test_image_builds():
 
     # Define a function that runs inside the image to check tools
     sb = modal.Sandbox.create(
-        "bash", "-c", """
+        "bash",
+        "-c",
+        """
         echo "=== Tool Check ==="
         echo "node: $(node --version 2>&1)"
         echo "npm: $(npm --version 2>&1)"
@@ -64,6 +67,7 @@ def test_image_builds():
 # Test 2: Basic sandbox operations
 # =============================================================================
 
+
 def test_sandbox_basic():
     """Create a sandbox, run commands, verify filesystem, terminate."""
     print("\n" + "=" * 60)
@@ -76,7 +80,8 @@ def test_sandbox_basic():
     # Create sandbox with sleep
     print("Creating sandbox...")
     sb = modal.Sandbox.create(
-        "sleep", "infinity",
+        "sleep",
+        "infinity",
         app=app,
         image=image,
         timeout=120,
@@ -104,12 +109,14 @@ def test_sandbox_basic():
 
     # Test 2c: Git operations
     print("  Testing git...")
-    git_proc = sb.exec("bash", "-c",
+    git_proc = sb.exec(
+        "bash",
+        "-c",
         "cd /workspace && git init && "
         "echo 'hello' > hello.txt && "
         "git add . && "
         "git commit -m 'initial' && "
-        "git log --oneline"
+        "git log --oneline",
     )
     git_out = git_proc.stdout.read()
     git_proc.wait()
@@ -118,7 +125,9 @@ def test_sandbox_basic():
 
     # Test 2d: Node.js execution
     print("  Testing Node.js...")
-    node_proc = sb.exec("node", "-e", "console.log(JSON.stringify({version: process.version, ok: true}))")
+    node_proc = sb.exec(
+        "node", "-e", "console.log(JSON.stringify({version: process.version, ok: true}))"
+    )
     node_out = node_proc.stdout.read()
     node_proc.wait()
     node_result = json.loads(node_out.strip())
@@ -135,6 +144,7 @@ def test_sandbox_basic():
 # =============================================================================
 # Test 3: Agent HTTP server in sandbox
 # =============================================================================
+
 
 async def test_agent_server():
     """Deploy the agent HTTP server in a sandbox and test its endpoints."""
@@ -155,7 +165,8 @@ async def test_agent_server():
 
     print("Creating sandbox with agent server...")
     sb = modal.Sandbox.create(
-        "sleep", "infinity",
+        "sleep",
+        "infinity",
         app=app,
         image=image,
         timeout=300,
@@ -170,7 +181,8 @@ async def test_agent_server():
         # Start the server in background
         print("  Starting agent server...")
         sb.exec(
-            "bash", "-c",
+            "bash",
+            "-c",
             "nohup node /agent/packages/sandbox/dist/server.js > /tmp/server.log 2>&1 &",
         )
 
@@ -195,7 +207,7 @@ async def test_agent_server():
                             print(f"  ✅ Health endpoint: {json.dumps(health)}")
                             ready = True
                             break
-                except (aiohttp.ClientError, asyncio.TimeoutError):
+                except (TimeoutError, aiohttp.ClientError):
                     pass
                 await asyncio.sleep(2)
 
@@ -220,6 +232,7 @@ async def test_agent_server():
 # Test 4: Full agent loop (requires GLM-5)
 # =============================================================================
 
+
 async def test_full_agent(glm5_endpoint: str):
     """
     Full end-to-end test: spawn sandbox, send coding task to agent
@@ -243,9 +256,7 @@ async def test_full_agent(glm5_endpoint: str):
             "/workspace/repo/src/greet.test.ts that verifies the function works."
         ),
         "scope": ["src/greet.ts", "src/greet.test.ts"],
-        "acceptance": (
-            "greet('World') returns 'Hello, World!'. Test file exists and would pass."
-        ),
+        "acceptance": ("greet('World') returns 'Hello, World!'. Test file exists and would pass."),
         "branch": "worker/test-001",
         "status": "assigned",
         "createdAt": int(time.time() * 1000),
@@ -272,7 +283,8 @@ async def test_full_agent(glm5_endpoint: str):
 
     print("Creating sandbox...")
     sb = modal.Sandbox.create(
-        "sleep", "infinity",
+        "sleep",
+        "infinity",
         app=app,
         image=image,
         timeout=600,
@@ -285,21 +297,24 @@ async def test_full_agent(glm5_endpoint: str):
 
     try:
         # Initialize a git repo in the sandbox for the agent to work in
-        init_proc = sb.exec("bash", "-c",
+        init_proc = sb.exec(
+            "bash",
+            "-c",
             "mkdir -p /workspace/repo/src && "
             "cd /workspace/repo && "
             "git init && "
-            "echo '{\"name\": \"test-project\", \"type\": \"module\"}' > package.json && "
+            'echo \'{"name": "test-project", "type": "module"}\' > package.json && '
             "git add . && "
             "git commit -m 'initial' && "
-            "git checkout -b worker/test-001"
+            "git checkout -b worker/test-001",
         )
         init_proc.wait()
         print("  ✅ Repo initialized in sandbox")
 
         # Start agent server
         sb.exec(
-            "bash", "-c",
+            "bash",
+            "-c",
             "nohup node /agent/packages/sandbox/dist/server.js > /tmp/server.log 2>&1 &",
         )
 
@@ -313,10 +328,12 @@ async def test_full_agent(glm5_endpoint: str):
             deadline = time.time() + 30
             while time.time() < deadline:
                 try:
-                    async with session.get(f"{url}/health", timeout=aiohttp.ClientTimeout(total=5)) as resp:
+                    async with session.get(
+                        f"{url}/health", timeout=aiohttp.ClientTimeout(total=5)
+                    ) as resp:
                         if resp.status == 200:
                             break
-                except (aiohttp.ClientError, asyncio.TimeoutError):
+                except (TimeoutError, aiohttp.ClientError):
                     pass
                 await asyncio.sleep(2)
 
@@ -344,7 +361,7 @@ async def test_full_agent(glm5_endpoint: str):
                     result = await resp.json()
                     handoff = result.get("handoff", result)
 
-                    print(f"\n  === HANDOFF ===")
+                    print("\n  === HANDOFF ===")
                     print(f"  Status:  {handoff.get('status', 'unknown')}")
                     print(f"  Summary: {handoff.get('summary', 'N/A')}")
                     print(f"  Files:   {handoff.get('filesChanged', [])}")
@@ -370,6 +387,7 @@ async def test_full_agent(glm5_endpoint: str):
 # =============================================================================
 # CLI
 # =============================================================================
+
 
 def main():
     parser = argparse.ArgumentParser(description="Longshot E2E Tests")

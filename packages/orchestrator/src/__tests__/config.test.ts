@@ -1,6 +1,6 @@
-import { describe, it, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { loadConfig, getConfig, resetConfig } from "../config.js";
+import { beforeEach, describe, it } from "node:test";
+import { getConfig, loadConfig, resetConfig } from "../config.js";
 
 // Environment helper to set and restore env vars
 function withEnv(env: Record<string, string>, fn: () => void): void {
@@ -104,7 +104,7 @@ describe("config", () => {
       delete process.env.LLM_ENDPOINTS;
       assert.throws(
         () => loadConfig(),
-        (err: Error) => err.message.includes("Missing required env: LLM_ENDPOINTS")
+        (err: Error) => err.message.includes("Missing required env: LLM_ENDPOINTS"),
       );
     });
   });
@@ -114,19 +114,25 @@ describe("config", () => {
       delete process.env.GIT_REPO_URL;
       assert.throws(
         () => loadConfig(),
-        (err: Error) => err.message === "Missing required env: GIT_REPO_URL"
+        (err: Error) => err.message === "Missing required env: GIT_REPO_URL",
       );
     });
   });
 
   it("parses LLM_BASE_URL as single endpoint with normalization", () => {
-    withEnv({ ...REQUIRED_ENV, LLM_BASE_URL: "https://pod-abc123-8000.proxy.runpod.net/v1/" }, () => {
-      const config = loadConfig();
-      assert.strictEqual(config.llm.endpoints.length, 1);
-      assert.strictEqual(config.llm.endpoints[0].endpoint, "https://pod-abc123-8000.proxy.runpod.net");
-      assert.strictEqual(config.llm.endpoints[0].name, "default");
-      assert.strictEqual(config.llm.endpoints[0].weight, 100);
-    });
+    withEnv(
+      { ...REQUIRED_ENV, LLM_BASE_URL: "https://pod-abc123-8000.proxy.runpod.net/v1/" },
+      () => {
+        const config = loadConfig();
+        assert.strictEqual(config.llm.endpoints.length, 1);
+        assert.strictEqual(
+          config.llm.endpoints[0].endpoint,
+          "https://pod-abc123-8000.proxy.runpod.net",
+        );
+        assert.strictEqual(config.llm.endpoints[0].name, "default");
+        assert.strictEqual(config.llm.endpoints[0].weight, 100);
+      },
+    );
   });
 
   it("parses LLM_ENDPOINTS as multi-endpoint JSON", () => {
@@ -168,7 +174,7 @@ describe("config", () => {
     withEnv({ ...REQUIRED_ENV, MERGE_STRATEGY: "invalid" }, () => {
       assert.throws(
         () => loadConfig(),
-        (err: Error) => err.message.includes("Invalid mergeStrategy")
+        (err: Error) => err.message.includes("Invalid mergeStrategy"),
       );
     });
   });

@@ -7,20 +7,38 @@
     "build": "turbo run build",
     "clean": "turbo run clean",
     "typecheck": "turbo run typecheck",
+    "lint": "biome check .",
+    "format": "biome check --write .",
+    "format:check": "biome check .",
     "stagehand:record": "node scripts/stagehand-record.mjs",
     "stagehand:record:hook": "node scripts/stagehand-record.mjs --trigger=post-merge",
-    "stagehand:hooks:install": "bash scripts/install-stagehand-hooks.sh"
+    "stagehand:hooks:install": "bash scripts/install-stagehand-hooks.sh",
+    "test": "turbo test",
+    "lint:python": "ruff check .",
+    "prepare": "husky"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.4.4",
     "@types/node": "^22.0.0",
+    "husky": "^9.1.7",
+    "lint-staged": "^16.3.1",
     "turbo": "^2.0.0",
     "typescript": "^5.5.0"
   },
   "packageManager": "pnpm@9.0.0",
   "dependencies": {
-    "@longshot/core": "workspace:*",
     "@browserbasehq/stagehand": "^3.0.8",
+    "@longshot/core": "workspace:*",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "zod": "^4.3.6"
+  },
+  "lint-staged": {
+    "*.{ts,tsx,js,jsx,json}": [
+      "biome check --write --no-errors-on-unmatched"
+    ],
+    "*.py": [
+      "ruff check --fix",
+      "ruff format"
+    ]
   }
 }

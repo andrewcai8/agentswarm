@@ -43,7 +43,6 @@ try:
     from rich.panel import Panel
     from rich.table import Table
     from rich.text import Text
-    from rich.tree import Tree
 except ImportError:
     print("Rich library required.  pip install rich")
     sys.exit(1)
@@ -54,12 +53,13 @@ except ImportError:
 # ---------------------------------------------------------------------------
 
 MAX_ACTIVITY = 50
-COST_PER_1K = 0.001          # default $/1K tokens -- override with --cost-rate
+COST_PER_1K = 0.001  # default $/1K tokens -- override with --cost-rate
 
 
 # ---------------------------------------------------------------------------
 # Planner Tree State -- recursive root/planner/subplanner hierarchy
 # ---------------------------------------------------------------------------
+
 
 class PlannerTreeState:
     ROOT_ID = "root-planner"
@@ -210,6 +210,7 @@ class PlannerTreeState:
 # Shared Dashboard State (thread-safe)
 # ---------------------------------------------------------------------------
 
+
 class DashboardState:
     def __init__(self, max_agents: int, total_features: int, cost_rate: float):
         self._lock = threading.RLock()
@@ -356,7 +357,9 @@ class DashboardState:
                 new_st = data.get("to", "")
                 if task_id and new_st:
                     parent_id = data.get("parentId") or data.get("parentTaskId")
-                    self.tree.update_status(task_id, new_st, parent_id, node_role, desc=data.get("desc", ""))
+                    self.tree.update_status(
+                        task_id, new_st, parent_id, node_role, desc=data.get("desc", "")
+                    )
 
             # -- Task created (from Planner callback) -----------------------
             elif msg == "Task created":
@@ -514,10 +517,7 @@ class DashboardState:
             cap = max(1, tree_snapshot["active_max_depth"] + 1)
             self.visible_levels = max(1, min(self.visible_levels, cap))
             total_tasks = (
-                self.active_workers
-                + self.pending_tasks
-                + self.completed_tasks
-                + self.failed_tasks
+                self.active_workers + self.pending_tasks + self.completed_tasks + self.failed_tasks
             )
             return {
                 "elapsed": elapsed,
@@ -573,6 +573,7 @@ class DashboardState:
 # Layout
 # ---------------------------------------------------------------------------
 
+
 def make_layout() -> Layout:
     root = Layout(name="root")
     root.split_column(
@@ -618,6 +619,7 @@ def _grid_pane_from_mouse(mouse_x: int, mouse_y: int, term_w: int, term_h: int) 
 # ---------------------------------------------------------------------------
 # Panel renderers
 # ---------------------------------------------------------------------------
+
 
 def _fmt_tokens(n: int) -> str:
     if n >= 1_000_000:
@@ -674,23 +676,25 @@ def render_metrics(s: dict[str, Any]) -> Panel:
     rate = s["merge_rate"]
     rate_color = "bright_green" if rate > 0.9 else "yellow" if rate > 0.7 else "bright_red"
 
-    tbl.add_row("Iteration",   f"[bright_white]{s['iteration']}[/]")
-    tbl.add_row("Commits/hr",  f"[bright_green]{s['cph']:,.0f}[/]")
-    tbl.add_row("Completed",   f"[bright_green]{done}[/][dim]/{total}  {pct:.0f}%[/]")
-    tbl.add_row("Failed",      f"[bright_red]{s['failed']}[/]" if s['failed'] else "[dim]0[/]")
-    tbl.add_row("Pending",     f"[yellow]{s['pending']}[/]" if s['pending'] else "[dim]0[/]")
-    tbl.add_row("Merge rate",  f"[{rate_color}]{rate * 100:.1f}%[/]")
+    tbl.add_row("Iteration", f"[bright_white]{s['iteration']}[/]")
+    tbl.add_row("Commits/hr", f"[bright_green]{s['cph']:,.0f}[/]")
+    tbl.add_row("Completed", f"[bright_green]{done}[/][dim]/{total}  {pct:.0f}%[/]")
+    tbl.add_row("Failed", f"[bright_red]{s['failed']}[/]" if s["failed"] else "[dim]0[/]")
+    tbl.add_row("Pending", f"[yellow]{s['pending']}[/]" if s["pending"] else "[dim]0[/]")
+    tbl.add_row("Merge rate", f"[{rate_color}]{rate * 100:.1f}%[/]")
     in_flight = s.get("estimated_in_flight", 0)
     token_label = f"[bright_cyan]{_fmt_tokens(s['tokens'])}[/]"
     if in_flight > 0:
         token_label += f" [dim](~+{_fmt_tokens(in_flight)} wip)[/]"
-    tbl.add_row("Tokens",      token_label)
-    tbl.add_row("Est. cost",   f"[bright_cyan]${s['cost']:.2f}[/]")
+    tbl.add_row("Tokens", token_label)
+    tbl.add_row("Est. cost", f"[bright_cyan]${s['cost']:.2f}[/]")
 
     sparkline = s.get("sparkline", "          ")
     velocity = s.get("recent_velocity", 0)
-    tbl.add_row("Velocity", f"[bright_green]{sparkline}[/] [bright_white]{velocity:.1f}[/][dim]/min[/]")
-    tbl.add_row("Running", f"[bright_yellow]{s['active']}[/]" if s['active'] else "[dim]0[/]")
+    tbl.add_row(
+        "Velocity", f"[bright_green]{sparkline}[/] [bright_white]{velocity:.1f}[/][dim]/min[/]"
+    )
+    tbl.add_row("Running", f"[bright_yellow]{s['active']}[/]" if s["active"] else "[dim]0[/]")
 
     return Panel(tbl, title="[bold]METRICS[/]", border_style="bright_blue")
 
@@ -700,12 +704,13 @@ def _tabs_title(active_tab: str) -> str:
         return "[dim]Agent Grid[/]  [reverse] Activity [/]"
     return "[reverse] Agent Grid [/]  [dim]Activity[/]"
 
+
 def render_grid(s: dict[str, Any]) -> Panel:
     tree_data = s["tree"]
     nodes = tree_data["nodes"]
     root_id = tree_data["root"]
     visible_levels = s["visible_levels"]
-    max_levels = tree_data.get("active_max_depth", tree_data["max_depth"]) + 1
+    max_visible_depth = max(0, visible_levels - 1)
     max_visible_depth = max(0, visible_levels - 1)
 
     def meter(progress: float, status: str) -> str:
@@ -808,9 +813,7 @@ def render_grid(s: dict[str, Any]) -> Panel:
 
         def emit(parent_id: str, depth: int, prefix: str):
             visible_children = [
-                cid
-                for cid in nodes[parent_id]["children"]
-                if has_bucket(cid, show_terminal)
+                cid for cid in nodes[parent_id]["children"] if has_bucket(cid, show_terminal)
             ]
             for idx, child_id in enumerate(visible_children):
                 child = nodes.get(child_id)
@@ -818,9 +821,7 @@ def render_grid(s: dict[str, Any]) -> Panel:
                     continue
                 is_last = idx == len(visible_children) - 1
                 connector = "└─ " if is_last else "├─ "
-                child_match = (
-                    is_terminal(child_id) if show_terminal else not is_terminal(child_id)
-                )
+                child_match = is_terminal(child_id) if show_terminal else not is_terminal(child_id)
 
                 line = Text()
                 line.append(f"{prefix}{connector}", style="bright_black")
@@ -866,7 +867,7 @@ def render_grid(s: dict[str, Any]) -> Panel:
         max_offset = max(0, len(lines) - window)
         clamped = max(0, min(offset, max_offset))
         out = Text()
-        visible = lines[clamped: clamped + window]
+        visible = lines[clamped : clamped + window]
         for i in range(window):
             if i < len(visible):
                 out.append_text(visible[i])
@@ -928,8 +929,12 @@ def render_merge(s: dict[str, Any]) -> Panel:
     bar_w = 20
     filled = int(rate * bar_w) if s["merge_total"] > 0 else 0
     bar = (
-        "[bright_green]" + "\u2588" * filled + "[/]"
-        + "[bright_black]" + "\u2591" * (bar_w - filled) + "[/]"
+        "[bright_green]"
+        + "\u2588" * filled
+        + "[/]"
+        + "[bright_black]"
+        + "\u2591" * (bar_w - filled)
+        + "[/]"
     )
     pct = f"{rate * 100:.0f}%" if s["merge_total"] > 0 else " -- "
 
@@ -937,11 +942,13 @@ def render_merge(s: dict[str, Any]) -> Panel:
     tbl.add_column("k", style="dim", no_wrap=True, width=11)
     tbl.add_column("v", justify="right")
     tbl.add_row("Success", f"{bar} {pct}")
-    tbl.add_row("Merged",    f"[bright_green]{s['merge_merged']}[/]")
-    tbl.add_row("Conflicts",
-                f"[yellow]{s['merge_conflicts']}[/]" if s['merge_conflicts'] else "[dim]0[/]")
-    tbl.add_row("Failed",
-                f"[bright_red]{s['merge_failed']}[/]" if s['merge_failed'] else "[dim]0[/]")
+    tbl.add_row("Merged", f"[bright_green]{s['merge_merged']}[/]")
+    tbl.add_row(
+        "Conflicts", f"[yellow]{s['merge_conflicts']}[/]" if s["merge_conflicts"] else "[dim]0[/]"
+    )
+    tbl.add_row(
+        "Failed", f"[bright_red]{s['merge_failed']}[/]" if s["merge_failed"] else "[dim]0[/]"
+    )
 
     return Panel(tbl, title="[bold]MERGE QUEUE[/]", border_style="bright_magenta")
 
@@ -968,8 +975,12 @@ def render_footer(s: dict[str, Any]) -> Panel:
     bar_w = 50
     filled = int(pct * bar_w)
     bar = (
-        "[bold bright_green]" + "\u2588" * filled + "[/]"
-        + "[bright_black]" + "\u2591" * (bar_w - filled) + "[/]"
+        "[bold bright_green]"
+        + "\u2588" * filled
+        + "[/]"
+        + "[bright_black]"
+        + "\u2591" * (bar_w - filled)
+        + "[/]"
     )
     txt = Text.from_markup(
         f"  [bold]TASKS[/]  {bar}  [bright_white]{done}[/]"
@@ -994,12 +1005,18 @@ def render_controls(s: dict[str, Any], interactive: bool) -> Panel:
 # NDJSON readers
 # ---------------------------------------------------------------------------
 
+
 def reader_subprocess(cmd: list[str], q: queue.Queue[Any], cwd: str):
     """Spawn orchestrator process, read NDJSON lines from stdout."""
     try:
         proc = subprocess.Popen(
-            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            text=True, bufsize=1, cwd=cwd, env={**os.environ},
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            cwd=cwd,
+            env={**os.environ},
         )
         assert proc.stdout is not None
         for line in proc.stdout:
@@ -1012,10 +1029,13 @@ def reader_subprocess(cmd: list[str], q: queue.Queue[Any], cwd: str):
                 pass
         proc.wait()
     except Exception as exc:
-        q.put({
-            "level": "error", "message": f"Process error: {exc}",
-            "timestamp": int(time.time() * 1000),
-        })
+        q.put(
+            {
+                "level": "error",
+                "message": f"Process error: {exc}",
+                "timestamp": int(time.time() * 1000),
+            }
+        )
     finally:
         q.put(None)
 
@@ -1080,9 +1100,7 @@ def _find_latest_ndjson(logs_dir: str) -> str | None:
     files = [f for f in os.listdir(logs_dir) if f.startswith("run-") and f.endswith(".ndjson")]
     if not files:
         return None
-    files.sort(
-        key=lambda f: os.path.getmtime(os.path.join(logs_dir, f)), reverse=True
-    )
+    files.sort(key=lambda f: os.path.getmtime(os.path.join(logs_dir, f)), reverse=True)
     return os.path.join(logs_dir, files[0])
 
 
@@ -1203,38 +1221,73 @@ def demo_generator(q: queue.Queue[Any], max_agents: int, total_features: int):
                     else:
                         failed += 1
 
-                    q.put({"timestamp": ts, "level": "info", "agentId": "main",
-                           "agentRole": "root-planner", "message": "Task completed",
-                           "data": {"taskId": tid, "status": status,
-                                    "summary": f"Completed: {random.choice(_DEMO_DESCS)[:60]}",
-                                    "filesChanged": random.randint(1, 8),
-                                    "linesAdded": random.randint(20, 500),
-                                    "linesRemoved": random.randint(0, 100),
-                                    "filesCreated": random.randint(0, 3),
-                                    "filesModified": random.randint(1, 5),
-                                    "tokensUsed": tok,
-                                    "toolCallCount": random.randint(5, 40),
-                                    "durationMs": int((now - started) * 1000)}})
-                    q.put({"timestamp": ts, "level": "info", "agentId": "main",
-                           "agentRole": "root-planner", "message": "Task status",
-                           "data": {"taskId": tid, "from": "running", "to": status}})
+                    q.put(
+                        {
+                            "timestamp": ts,
+                            "level": "info",
+                            "agentId": "main",
+                            "agentRole": "root-planner",
+                            "message": "Task completed",
+                            "data": {
+                                "taskId": tid,
+                                "status": status,
+                                "summary": f"Completed: {random.choice(_DEMO_DESCS)[:60]}",
+                                "filesChanged": random.randint(1, 8),
+                                "linesAdded": random.randint(20, 500),
+                                "linesRemoved": random.randint(0, 100),
+                                "filesCreated": random.randint(0, 3),
+                                "filesModified": random.randint(1, 5),
+                                "tokensUsed": tok,
+                                "toolCallCount": random.randint(5, 40),
+                                "durationMs": int((now - started) * 1000),
+                            },
+                        }
+                    )
+                    q.put(
+                        {
+                            "timestamp": ts,
+                            "level": "info",
+                            "agentId": "main",
+                            "agentRole": "root-planner",
+                            "message": "Task status",
+                            "data": {"taskId": tid, "from": "running", "to": status},
+                        }
+                    )
 
                     # merge
                     if ok:
                         if random.random() < 0.94:
                             merged += 1
-                            q.put({"timestamp": ts, "level": "info",
-                                   "agentId": "planner", "agentRole": "root-planner",
-                                   "message": "Merge result",
-                                   "data": {"branch": f"worker/{tid}", "status": "merged",
-                                            "success": True}})
+                            q.put(
+                                {
+                                    "timestamp": ts,
+                                    "level": "info",
+                                    "agentId": "planner",
+                                    "agentRole": "root-planner",
+                                    "message": "Merge result",
+                                    "data": {
+                                        "branch": f"worker/{tid}",
+                                        "status": "merged",
+                                        "success": True,
+                                    },
+                                }
+                            )
                         else:
                             conflicts += 1
-                            q.put({"timestamp": ts, "level": "warn",
-                                   "agentId": "planner", "agentRole": "root-planner",
-                                   "message": "Merge result",
-                                   "data": {"branch": f"worker/{tid}", "status": "conflict",
-                                            "success": False}})
+                            q.put(
+                                {
+                                    "timestamp": ts,
+                                    "level": "warn",
+                                    "agentId": "planner",
+                                    "agentRole": "root-planner",
+                                    "message": "Merge result",
+                                    "data": {
+                                        "branch": f"worker/{tid}",
+                                        "status": "conflict",
+                                        "success": False,
+                                    },
+                                }
+                            )
                     del active[tid]
 
             # -- spawn new tasks to fill slots ------------------------------
@@ -1251,79 +1304,157 @@ def demo_generator(q: queue.Queue[Any], max_agents: int, total_features: int):
                 desc = random.choice(_DEMO_DESCS)
                 created.append(tid)
 
-                q.put({"timestamp": ts, "level": "info", "agentId": "main",
-                       "agentRole": "root-planner", "message": "Task created",
-                       "data": {"taskId": tid, "desc": desc, "parentId": parent_id or None}})
-                q.put({"timestamp": ts, "level": "info", "agentId": "worker-pool",
-                       "agentRole": "root-planner",
-                       "message": "Dispatching task to ephemeral sandbox",
-                       "data": {"taskId": tid, "parentId": parent_id or None}})
-                q.put({"timestamp": ts, "level": "info", "agentId": "main",
-                       "agentRole": "root-planner", "message": "Task status",
-                       "data": {"taskId": tid, "parentId": parent_id or None,
-                                "from": "pending", "to": "running", "desc": desc}})
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "main",
+                        "agentRole": "root-planner",
+                        "message": "Task created",
+                        "data": {"taskId": tid, "desc": desc, "parentId": parent_id or None},
+                    }
+                )
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "worker-pool",
+                        "agentRole": "root-planner",
+                        "message": "Dispatching task to ephemeral sandbox",
+                        "data": {"taskId": tid, "parentId": parent_id or None},
+                    }
+                )
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "main",
+                        "agentRole": "root-planner",
+                        "message": "Task status",
+                        "data": {
+                            "taskId": tid,
+                            "parentId": parent_id or None,
+                            "from": "pending",
+                            "to": "running",
+                            "desc": desc,
+                        },
+                    }
+                )
                 active[tid] = now
 
             for tid_active in list(active.keys()):
                 if random.random() < 0.3:
-                    phases = ["Cloning repo...", "Installing deps...", "Reading codebase...",
-                              "Writing implementation...", "Running tests...", "Committing changes...",
-                              f"Tool calls: {random.randint(5, 40)}", "Analyzing code structure..."]
-                    q.put({"timestamp": ts, "level": "info", "agentId": "worker-pool",
-                           "agentRole": "root-planner", "message": "Worker progress",
-                           "data": {"taskId": tid_active, "phase": "execution",
-                                    "detail": random.choice(phases)}})
+                    phases = [
+                        "Cloning repo...",
+                        "Installing deps...",
+                        "Reading codebase...",
+                        "Writing implementation...",
+                        "Running tests...",
+                        "Committing changes...",
+                        f"Tool calls: {random.randint(5, 40)}",
+                        "Analyzing code structure...",
+                    ]
+                    q.put(
+                        {
+                            "timestamp": ts,
+                            "level": "info",
+                            "agentId": "worker-pool",
+                            "agentRole": "root-planner",
+                            "message": "Worker progress",
+                            "data": {
+                                "taskId": tid_active,
+                                "phase": "execution",
+                                "detail": random.choice(phases),
+                            },
+                        }
+                    )
 
             if random.random() < 0.35:
                 eh = max(elapsed / 3600, 0.001)
                 ma = merged + conflicts
-                q.put({"timestamp": ts, "level": "info",
-                       "agentId": "monitor", "agentRole": "root-planner",
-                       "message": "Metrics",
-                       "data": {
-                           "timestamp": ts,
-                           "activeWorkers": len(active),
-                           "pendingTasks": max(0, task_n - done - failed - len(active)),
-                           "completedTasks": done,
-                           "failedTasks": failed,
-                           "commitsPerHour": done / eh,
-                           "mergeSuccessRate": merged / ma if ma else 0,
-                           "totalTokensUsed": tokens,
-                           "totalCostUsd": 0,
-                       }})
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "monitor",
+                        "agentRole": "root-planner",
+                        "message": "Metrics",
+                        "data": {
+                            "timestamp": ts,
+                            "activeWorkers": len(active),
+                            "pendingTasks": max(0, task_n - done - failed - len(active)),
+                            "completedTasks": done,
+                            "failedTasks": failed,
+                            "commitsPerHour": done / eh,
+                            "mergeSuccessRate": merged / ma if ma else 0,
+                            "totalTokensUsed": tokens,
+                            "totalCostUsd": 0,
+                        },
+                    }
+                )
 
             # -- iteration events -------------------------------------------
             if done > 0 and done % 15 == 0 and random.random() < 0.4:
                 iteration += 1
-                q.put({"timestamp": ts, "level": "info",
-                       "agentId": "main", "agentRole": "root-planner",
-                       "message": "Iteration complete",
-                       "data": {"iteration": iteration, "tasks": random.randint(8, 20),
-                                "handoffs": random.randint(8, 20),
-                                "activeWorkers": len(active),
-                                "completedTasks": done}})
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "main",
+                        "agentRole": "root-planner",
+                        "message": "Iteration complete",
+                        "data": {
+                            "iteration": iteration,
+                            "tasks": random.randint(8, 20),
+                            "handoffs": random.randint(8, 20),
+                            "activeWorkers": len(active),
+                            "completedTasks": done,
+                        },
+                    }
+                )
 
             if done > 0 and done % 20 == 0 and random.random() < 0.5:
-                q.put({"timestamp": ts, "level": "info", "agentId": "planner",
-                       "agentRole": "root-planner",
-                       "message": "Calling LLM for task decomposition",
-                       "data": {"isFirstPlan": False, "historyMessages": random.randint(4, 20),
-                                "newHandoffs": random.randint(3, 10)}})
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "planner",
+                        "agentRole": "root-planner",
+                        "message": "Calling LLM for task decomposition",
+                        "data": {
+                            "isFirstPlan": False,
+                            "historyMessages": random.randint(4, 20),
+                            "newHandoffs": random.randint(3, 10),
+                        },
+                    }
+                )
 
             # -- occasional reconciler sweep --------------------------------
             if random.random() < 0.015:
                 b = random.random() < 0.85
                 t = random.random() < 0.80
-                q.put({"timestamp": ts, "level": "info",
-                       "agentId": "reconciler", "agentRole": "reconciler",
-                       "message": "Sweep check results",
-                       "data": {"buildOk": b, "testsOk": t}})
+                q.put(
+                    {
+                        "timestamp": ts,
+                        "level": "info",
+                        "agentId": "reconciler",
+                        "agentRole": "reconciler",
+                        "message": "Sweep check results",
+                        "data": {"buildOk": b, "testsOk": t},
+                    }
+                )
                 if not (b and t):
                     fc = random.randint(1, 3)
-                    q.put({"timestamp": ts, "level": "info",
-                           "agentId": "main", "agentRole": "root-planner",
-                           "message": "Reconciler created fix tasks",
-                           "data": {"count": fc}})
+                    q.put(
+                        {
+                            "timestamp": ts,
+                            "level": "info",
+                            "agentId": "main",
+                            "agentRole": "root-planner",
+                            "message": "Reconciler created fix tasks",
+                            "data": {"count": fc},
+                        }
+                    )
 
             time.sleep(0.25)
     finally:
@@ -1333,6 +1464,7 @@ def demo_generator(q: queue.Queue[Any], max_agents: int, total_features: int):
 # ---------------------------------------------------------------------------
 # Input controls
 # ---------------------------------------------------------------------------
+
 
 class KeyPoller:
     def __init__(self, enabled: bool):
@@ -1424,6 +1556,7 @@ class KeyPoller:
 # Main
 # ---------------------------------------------------------------------------
 
+
 def print_json_loop(q: queue.Queue[Any]):
     """Read from queue and print raw NDJSON to stdout."""
     while True:
@@ -1442,18 +1575,31 @@ def main():
     ap = argparse.ArgumentParser(description="Longshot Rich Terminal Dashboard")
     ap.add_argument("--demo", action="store_true", help="Synthetic data mode")
     ap.add_argument("--stdin", action="store_true", help="Read NDJSON from stdin")
-    ap.add_argument("--replay", type=str, default=None, metavar="FILE",
-                     help="Replay an NDJSON log file at original speed")
-    ap.add_argument("--follow", action="store_true",
-                     help="Tail the latest logs/run-*.ndjson file live (use alongside Poke)")
-    ap.add_argument("--speed", type=float, default=1.0,
-                     help="Replay speed multiplier (default 1.0, e.g. 10 = 10x faster)")
+    ap.add_argument(
+        "--replay",
+        type=str,
+        default=None,
+        metavar="FILE",
+        help="Replay an NDJSON log file at original speed",
+    )
+    ap.add_argument(
+        "--follow",
+        action="store_true",
+        help="Tail the latest logs/run-*.ndjson file live (use alongside Poke)",
+    )
+    ap.add_argument(
+        "--speed",
+        type=float,
+        default=1.0,
+        help="Replay speed multiplier (default 1.0, e.g. 10 = 10x faster)",
+    )
     ap.add_argument("--json-only", action="store_true", help="Output raw NDJSON to stdout (no TUI)")
     ap.add_argument("--agents", type=int, default=100, help="Max agent slots (default 100)")
     ap.add_argument("--features", type=int, default=200, help="Total features (default 200)")
     ap.add_argument("--hz", type=int, default=4, help="Refresh rate Hz (default 4)")
-    ap.add_argument("--cost-rate", type=float, default=COST_PER_1K,
-                     help="$/1K tokens for cost estimate")
+    ap.add_argument(
+        "--cost-rate", type=float, default=COST_PER_1K, help="$/1K tokens for cost estimate"
+    )
     args = ap.parse_args()
 
     # If JSON-only, we don't need rich console or dashboard state
@@ -1463,8 +1609,9 @@ def main():
             logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
             thr = threading.Thread(target=reader_follow, args=(logs_dir, dq), daemon=True)
         elif args.demo:
-            thr = threading.Thread(target=demo_generator,
-                                   args=(dq, args.agents, args.features), daemon=True)
+            thr = threading.Thread(
+                target=demo_generator, args=(dq, args.agents, args.features), daemon=True
+            )
         elif args.stdin:
             thr = threading.Thread(target=reader_stdin, args=(dq,), daemon=True)
         else:
@@ -1486,11 +1633,13 @@ def main():
         logs_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
         thr = threading.Thread(target=reader_follow, args=(logs_dir, dq), daemon=True)
     elif args.replay:
-        thr = threading.Thread(target=reader_replay,
-                               args=(args.replay, args.speed, dq), daemon=True)
+        thr = threading.Thread(
+            target=reader_replay, args=(args.replay, args.speed, dq), daemon=True
+        )
     elif args.demo:
-        thr = threading.Thread(target=demo_generator,
-                               args=(dq, args.agents, args.features), daemon=True)
+        thr = threading.Thread(
+            target=demo_generator, args=(dq, args.agents, args.features), daemon=True
+        )
     elif args.stdin:
         thr = threading.Thread(target=reader_stdin, args=(dq,), daemon=True)
     else:
@@ -1602,9 +1751,11 @@ def main():
     console.print(f"  Duration    {timedelta(seconds=int(s['elapsed']))}")
     console.print(f"  Completed   {s['completed']} / {s['total_tasks']}")
     console.print(f"  Failed      {s['failed']}")
-    console.print(f"  Merged      {s['merge_merged']}  "
-                  f"conflicts {s['merge_conflicts']}  "
-                  f"failed {s['merge_failed']}")
+    console.print(
+        f"  Merged      {s['merge_merged']}  "
+        f"conflicts {s['merge_conflicts']}  "
+        f"failed {s['merge_failed']}"
+    )
     console.print(f"  Tokens      {s['tokens']:,}")
     console.print(f"  Est. cost   ${s['cost']:.2f}")
     console.print()

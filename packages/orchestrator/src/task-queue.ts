@@ -1,3 +1,5 @@
+/** @module Priority min-heap task queue with state machine lifecycle tracking */
+
 import type { Task, TaskStatus } from "@longshot/core";
 
 /**
@@ -166,7 +168,9 @@ export class TaskQueue {
    */
   enqueue(task: Task): void {
     if (task.status !== "pending") {
-      throw new Error(`Only pending tasks can be enqueued. Task ${task.id} has status "${task.status}"`);
+      throw new Error(
+        `Only pending tasks can be enqueued. Task ${task.id} has status "${task.status}"`,
+      );
     }
 
     this.tasks.set(task.id, task);

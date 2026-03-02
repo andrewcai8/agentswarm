@@ -1,6 +1,8 @@
-import { mkdirSync, createWriteStream, type WriteStream } from "node:fs";
+/** @module Distributed tracing with span-based instrumentation and LLM request/response capture */
+
+import { randomBytes, randomUUID } from "node:crypto";
+import { createWriteStream, mkdirSync, type WriteStream } from "node:fs";
 import { resolve } from "node:path";
-import { randomUUID, randomBytes } from "node:crypto";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -75,7 +77,7 @@ class TraceWriter {
 
   writeLLMDetail(
     spanId: string,
-    data: { messages: unknown[]; response?: unknown; error?: string }
+    data: { messages: unknown[]; response?: unknown; error?: string },
   ): void {
     const entry: LLMDetailEntry = {
       timestamp: Date.now(),
@@ -121,7 +123,7 @@ export class Span {
     private readonly tracer: Tracer,
     private readonly parentSpanId?: string,
     private taskId?: string,
-    private agentId?: string
+    private agentId?: string,
   ) {
     this.spanId = randomBytes(8).toString("hex");
     this.startTime = Date.now();
@@ -136,7 +138,7 @@ export class Span {
       this.buildEvent("event", {
         spanName: name,
         attributes: attrs ? { ...this.attrs, ...attrs } : { ...this.attrs },
-      })
+      }),
     );
   }
 
@@ -160,7 +162,7 @@ export class Span {
       this.tracer,
       this.spanId,
       overrides?.taskId ?? this.taskId,
-      overrides?.agentId ?? this.agentId
+      overrides?.agentId ?? this.agentId,
     );
   }
 
@@ -168,15 +170,13 @@ export class Span {
   end(): void {
     if (this.ended) {
       process.stderr.write(
-        `[tracer] WARNING: Span "${this.name}" (${this.spanId}) already ended\n`
+        `[tracer] WARNING: Span "${this.name}" (${this.spanId}) already ended\n`,
       );
       return;
     }
     this.ended = true;
     const durationMs = Date.now() - this.startTime;
-    traceWriter.write(
-      this.buildEvent("end", { durationMs, spanStatus: this.status ?? "ok" })
-    );
+    traceWriter.write(this.buildEvent("end", { durationMs, spanStatus: this.status ?? "ok" }));
   }
 
   /** Return the trace context for this span. */
@@ -190,18 +190,14 @@ export class Span {
 
   // -- internals --
 
-  private buildEvent(
-    kind: SpanEvent["spanKind"],
-    overrides?: Partial<SpanEvent>
-  ): SpanEvent {
+  private buildEvent(kind: SpanEvent["spanKind"], overrides?: Partial<SpanEvent>): SpanEvent {
     return {
       timestamp: Date.now(),
       trace: this.context(),
       spanName: this.name,
       spanKind: kind,
       spanStatus: this.status,
-      attributes:
-        Object.keys(this.attrs).length > 0 ? { ...this.attrs } : undefined,
+      attributes: Object.keys(this.attrs).length > 0 ? { ...this.attrs } : undefined,
       taskId: this.taskId,
       agentId: this.agentId,
       ...overrides,
@@ -221,24 +217,12 @@ export class Tracer {
   }
 
   /** Start a new span. */
-  startSpan(
-    name: string,
-    opts?: { parent?: Span; taskId?: string; agentId?: string }
-  ): Span {
-    return new Span(
-      name,
-      this,
-      opts?.parent?.spanId,
-      opts?.taskId,
-      opts?.agentId
-    );
+  startSpan(name: string, opts?: { parent?: Span; taskId?: string; agentId?: string }): Span {
+    return new Span(name, this, opts?.parent?.spanId, opts?.taskId, opts?.agentId);
   }
 
   /** Recreate a Tracer from a propagated context (e.g. from a sandbox worker). */
-  static fromPropagated(ctx: {
-    traceId: string;
-    parentSpanId: string;
-  }): Tracer {
+  static fromPropagated(ctx: { traceId: string; parentSpanId: string }): Tracer {
     return new Tracer(ctx.traceId);
   }
 
@@ -260,9 +244,7 @@ export class Tracer {
 // ---------------------------------------------------------------------------
 
 /** Enable tracing. Call once at startup. Returns paths to trace and LLM detail files. */
-export function enableTracing(
-  projectRoot: string
-): { traceFile: string; llmDetailFile: string } {
+export function enableTracing(projectRoot: string): { traceFile: string; llmDetailFile: string } {
   return traceWriter.enable(projectRoot);
 }
 
@@ -282,7 +264,7 @@ export function createTracer(traceId?: string): Tracer {
  */
 export function writeLLMDetail(
   spanId: string,
-  data: { messages: unknown[]; response?: unknown; error?: string }
+  data: { messages: unknown[]; response?: unknown; error?: string },
 ): void {
   traceWriter.writeLLMDetail(spanId, data);
 }

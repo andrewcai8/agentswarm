@@ -1,3 +1,5 @@
+/** @module Top-level orchestrator factory — wires all components and manages the finalization phase */
+
 /**
  * Orchestrator Factory — creates and wires all components.
  */
@@ -6,17 +8,17 @@ import { execFile } from "node:child_process";
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { promisify } from "node:util";
-import type { Task, Handoff, MetricsSnapshot } from "@longshot/core";
+import type { Handoff, MetricsSnapshot, Task } from "@longshot/core";
 import { createLogger, createTracer, type Tracer } from "@longshot/core";
 import { loadConfig, type OrchestratorConfig } from "./config.js";
-import { TaskQueue } from "./task-queue.js";
-import { WorkerPool } from "./worker-pool.js";
 import { MergeQueue } from "./merge-queue.js";
-import { GitMutex, slugifyForBranch } from "./shared.js";
 import { Monitor } from "./monitor.js";
 import { Planner } from "./planner.js";
 import { Reconciler, type SweepResult } from "./reconciler.js";
-import { Subplanner, DEFAULT_SUBPLANNER_CONFIG } from "./subplanner.js";
+import { GitMutex, slugifyForBranch } from "./shared.js";
+import { DEFAULT_SUBPLANNER_CONFIG, Subplanner } from "./subplanner.js";
+import { TaskQueue } from "./task-queue.js";
+import { WorkerPool } from "./worker-pool.js";
 
 const execFileAsync = promisify(execFile);
 const logger = createLogger("orchestrator", "root-planner");
@@ -139,7 +141,11 @@ export async function createOrchestrator(
     model: config.llm.model,
     maxTokens: config.llm.maxTokens,
     temperature: config.llm.temperature,
-    endpoints: config.llm.endpoints.map(e => ({ name: e.name, endpoint: e.endpoint, weight: e.weight })),
+    endpoints: config.llm.endpoints.map((e) => ({
+      name: e.name,
+      endpoint: e.endpoint,
+      weight: e.weight,
+    })),
     repoUrl: config.git.repoUrl,
     mainBranch: config.git.mainBranch,
     branchPrefix: config.git.branchPrefix,
@@ -320,10 +326,13 @@ export async function createOrchestrator(
         }
 
         if (conflictCounter >= MAX_CONFLICT_FIX_TASKS) {
-          logger.warn("Conflict-fix budget exhausted, skipping (branch preserved for finalization)", {
-            branch: info.branch,
-            limit: MAX_CONFLICT_FIX_TASKS,
-          });
+          logger.warn(
+            "Conflict-fix budget exhausted, skipping (branch preserved for finalization)",
+            {
+              branch: info.branch,
+              limit: MAX_CONFLICT_FIX_TASKS,
+            },
+          );
           return;
         }
 
@@ -331,7 +340,8 @@ export async function createOrchestrator(
         const fixId = `conflict-fix-${String(conflictCounter).padStart(3, "0")}`;
         const fixTask: Task = {
           id: fixId,
-          description: `Resolve merge conflict from branch "${info.branch}". Conflicting files: ${info.conflictingFiles.join(", ")}. ` +
+          description:
+            `Resolve merge conflict from branch "${info.branch}". Conflicting files: ${info.conflictingFiles.join(", ")}. ` +
             `The sandbox will check out the original branch and rebase it onto main — conflict markers will be present in the working tree. ` +
             `Open each conflicting file, find <<<<<<< / ======= / >>>>>>> blocks, resolve by keeping the correct version based on surrounding code context. ` +
             `Remove all conflict markers and run \`git add\` on each resolved file, then \`git rebase --continue\`. Ensure the file compiles after resolution.`,
@@ -407,7 +417,7 @@ export async function createOrchestrator(
 
           // Step 2: Re-enqueue unmerged branches for another attempt
           const allBranches = planner.getAllDispatchedBranches();
-          const unmerged = allBranches.filter(b => !mergeQueue.isBranchMerged(b));
+          const unmerged = allBranches.filter((b) => !mergeQueue.isBranchMerged(b));
           if (unmerged.length > 0) {
             logger.info("Re-enqueuing unmerged branches (retry counts reset)", {
               count: unmerged.length,
@@ -442,10 +452,15 @@ export async function createOrchestrator(
           finalTestsOk = sweepResult.testsOk;
 
           // Step 4: Check branch completeness
-          const postSweepUnmerged = allBranches.filter(b => !mergeQueue.isBranchMerged(b));
+          const postSweepUnmerged = allBranches.filter((b) => !mergeQueue.isBranchMerged(b));
           const allMerged = postSweepUnmerged.length === 0;
 
-          if (sweepResult.buildOk && sweepResult.testsOk && !sweepResult.hasConflictMarkers && allMerged) {
+          if (
+            sweepResult.buildOk &&
+            sweepResult.testsOk &&
+            !sweepResult.hasConflictMarkers &&
+            allMerged
+          ) {
             logger.info("Finalization sweep PASSED — all green, all branches merged!", { attempt });
             break;
           }
@@ -505,16 +520,19 @@ export async function createOrchestrator(
 
         // Final branch completeness assessment
         const finalAllBranches = planner.getAllDispatchedBranches();
-        const finalUnmerged = finalAllBranches.filter(b => !mergeQueue.isBranchMerged(b));
+        const finalUnmerged = finalAllBranches.filter((b) => !mergeQueue.isBranchMerged(b));
         const finalAllMerged = finalUnmerged.length === 0;
 
         if (finalUnmerged.length > 0) {
-          logger.warn("Run finished with unmerged branches (preserved on remote for manual recovery)", {
-            total: finalAllBranches.length,
-            merged: finalAllBranches.length - finalUnmerged.length,
-            unmerged: finalUnmerged.length,
-            branches: finalUnmerged,
-          });
+          logger.warn(
+            "Run finished with unmerged branches (preserved on remote for manual recovery)",
+            {
+              total: finalAllBranches.length,
+              merged: finalAllBranches.length - finalUnmerged.length,
+              unmerged: finalUnmerged.length,
+              branches: finalUnmerged,
+            },
+          );
         }
 
         const finalizationDuration = Date.now() - finalizationStart;

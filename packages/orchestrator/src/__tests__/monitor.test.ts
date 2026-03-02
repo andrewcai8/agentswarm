@@ -1,9 +1,9 @@
-import { describe, it, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { Monitor } from "../monitor.js";
+import { afterEach, describe, it } from "node:test";
 import type { MonitorConfig } from "../monitor.js";
-import type { WorkerPool, Worker } from "../worker-pool.js";
+import { Monitor } from "../monitor.js";
 import type { TaskQueue } from "../task-queue.js";
+import type { Worker, WorkerPool } from "../worker-pool.js";
 
 function createMockWorkerPool(workers: Worker[] = [], totalActiveToolCalls = 0): WorkerPool {
   return {
@@ -15,7 +15,9 @@ function createMockWorkerPool(workers: Worker[] = [], totalActiveToolCalls = 0):
   } as unknown as WorkerPool;
 }
 
-function createMockTaskQueue(counts = { pending: 0, completed: 0, failed: 0, running: 0 }): TaskQueue {
+function createMockTaskQueue(
+  counts = { pending: 0, completed: 0, failed: 0, running: 0 },
+): TaskQueue {
   return {
     getPendingCount: () => counts.pending,
     getCompletedCount: () => counts.completed,
@@ -28,7 +30,16 @@ function makeWorker(overrides?: Partial<Worker>): Worker {
   const now = Date.now();
   return {
     id: "ephemeral-task-1",
-    currentTask: { id: "task-1", description: "test", scope: [], acceptance: "", branch: "worker/task-1", status: "running" as const, createdAt: now, priority: 5 },
+    currentTask: {
+      id: "task-1",
+      description: "test",
+      scope: [],
+      acceptance: "",
+      branch: "worker/task-1",
+      status: "running" as const,
+      createdAt: now,
+      priority: 5,
+    },
     startedAt: now,
     ...overrides,
   };
@@ -80,7 +91,7 @@ describe("Monitor", () => {
 
     it("returns true for long-running worker", () => {
       config = createConfig();
-      const startedAt = Date.now() - (config.workerTimeout * 1000) - 10000;
+      const startedAt = Date.now() - config.workerTimeout * 1000 - 10000;
       const worker = makeWorker({ startedAt });
       monitor = new Monitor(config, createMockWorkerPool([worker]), createMockTaskQueue());
       assert.strictEqual(monitor.isWorkerTimedOut(worker), true);
@@ -179,7 +190,7 @@ describe("Monitor", () => {
     it("filters correctly", () => {
       config = createConfig();
       const now = Date.now();
-      const staleTime = now - (config.workerTimeout * 1000) - 10000;
+      const staleTime = now - config.workerTimeout * 1000 - 10000;
 
       const recentWorker = makeWorker({ id: "worker-1", startedAt: now });
       const timedOutWorker = makeWorker({ id: "worker-2", startedAt: staleTime });

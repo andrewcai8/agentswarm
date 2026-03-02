@@ -1,9 +1,14 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import type { Task, Handoff } from "@longshot/core";
-import { shouldDecompose, DEFAULT_SUBPLANNER_CONFIG, aggregateHandoffs, createFailureHandoff } from "../subplanner.js";
-import type { SubplannerConfig } from "../subplanner.js";
+import { describe, it } from "node:test";
+import type { Handoff, Task } from "@longshot/core";
 import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";
+import type { SubplannerConfig } from "../subplanner.js";
+import {
+  aggregateHandoffs,
+  createFailureHandoff,
+  DEFAULT_SUBPLANNER_CONFIG,
+  shouldDecompose,
+} from "../subplanner.js";
 
 function makeTask(overrides?: Partial<Task>): Task {
   return {
@@ -165,11 +170,27 @@ describe("aggregateHandoffs", () => {
     const handoffs = [
       makeHandoff({
         taskId: "sub-1",
-        metrics: { linesAdded: 10, linesRemoved: 2, filesCreated: 1, filesModified: 0, tokensUsed: 500, toolCallCount: 5, durationMs: 3000 },
+        metrics: {
+          linesAdded: 10,
+          linesRemoved: 2,
+          filesCreated: 1,
+          filesModified: 0,
+          tokensUsed: 500,
+          toolCallCount: 5,
+          durationMs: 3000,
+        },
       }),
       makeHandoff({
         taskId: "sub-2",
-        metrics: { linesAdded: 20, linesRemoved: 5, filesCreated: 2, filesModified: 1, tokensUsed: 800, toolCallCount: 8, durationMs: 5000 },
+        metrics: {
+          linesAdded: 20,
+          linesRemoved: 5,
+          filesCreated: 2,
+          filesModified: 1,
+          tokensUsed: 800,
+          toolCallCount: 8,
+          durationMs: 5000,
+        },
       }),
     ];
 
@@ -340,7 +361,10 @@ describe("Task parent-child relationships", () => {
     const description = "Implement greedy meshing for the voxel engine";
     const branch = `${branchPrefix}${subtaskId}-${slugifyForBranch(description)}`;
 
-    assert.strictEqual(branch, "worker/task-042-sub-3-implement-greedy-meshing-for-the-voxel-engine");
+    assert.strictEqual(
+      branch,
+      "worker/task-042-sub-3-implement-greedy-meshing-for-the-voxel-engine",
+    );
   });
 });
 
@@ -350,7 +374,10 @@ describe("slugifyForBranch", () => {
   });
 
   it("strips non-alphanumeric characters", () => {
-    assert.strictEqual(slugifyForBranch("Fix bug in src/auth.ts (urgent!)"), "fix-bug-in-src-auth-ts-urgent");
+    assert.strictEqual(
+      slugifyForBranch("Fix bug in src/auth.ts (urgent!)"),
+      "fix-bug-in-src-auth-ts-urgent",
+    );
   });
 
   it("collapses consecutive hyphens", () => {

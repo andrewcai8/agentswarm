@@ -1,3 +1,5 @@
+/** @module Ephemeral worker pool that spawns Python subprocesses for Modal sandbox execution */
+
 /**
  * Worker Pool — Ephemeral sandbox model
  *
@@ -14,7 +16,7 @@
 
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import type { Task, Handoff, HarnessConfig, Tracer, Span } from "@longshot/core";
+import type { Handoff, HarnessConfig, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 
 const logger = createLogger("worker-pool", "root-planner");
@@ -89,10 +91,12 @@ export class WorkerPool {
 
     logger.info("Dispatching task to ephemeral sandbox", { taskId: task.id });
 
-    const workerSpan = parentSpan?.child("worker.execute", { taskId: task.id, agentId: "worker-pool" })
-      ?? this.tracer?.startSpan("worker.execute", { taskId: task.id, agentId: "worker-pool" });
+    const workerSpan =
+      parentSpan?.child("worker.execute", { taskId: task.id, agentId: "worker-pool" }) ??
+      this.tracer?.startSpan("worker.execute", { taskId: task.id, agentId: "worker-pool" });
 
-    const traceCtx = workerSpan && this.tracer ? this.tracer.propagationContext(workerSpan) : undefined;
+    const traceCtx =
+      workerSpan && this.tracer ? this.tracer.propagationContext(workerSpan) : undefined;
 
     const endpoint = this.config.llm.endpoints[0];
     const baseUrl = endpoint.endpoint.replace(/\/+$/, "");
@@ -113,7 +117,13 @@ export class WorkerPool {
       trace: traceCtx,
     });
 
-    logger.debug("Sandbox payload prepared", { taskId: task.id, endpointName: endpoint.name, model: this.config.llm.model, payloadSize: payload.length, hasTraceCtx: !!traceCtx });
+    logger.debug("Sandbox payload prepared", {
+      taskId: task.id,
+      endpointName: endpoint.name,
+      model: this.config.llm.model,
+      payloadSize: payload.length,
+      hasTraceCtx: !!traceCtx,
+    });
 
     try {
       const handoff = await this.runSandboxStreaming(task.id, task.branch, payload, workerSpan);
@@ -153,19 +163,24 @@ export class WorkerPool {
     }
   }
 
-  private runSandboxStreaming(taskId: string, branchName: string, payload: string, workerSpan?: Span): Promise<Handoff> {
+  private runSandboxStreaming(
+    taskId: string,
+    branchName: string,
+    payload: string,
+    workerSpan?: Span,
+  ): Promise<Handoff> {
     return new Promise<Handoff>((resolve, reject) => {
-      const proc = spawn(
-        this.config.pythonPath,
-        ["-u", "infra/spawn_sandbox.py", payload],
-        {
-          cwd: process.cwd(),
-          env: { ...process.env, PYTHONUNBUFFERED: "1" },
-          stdio: ["ignore", "pipe", "pipe"],
-        },
-      );
+      const proc = spawn(this.config.pythonPath, ["-u", "infra/spawn_sandbox.py", payload], {
+        cwd: process.cwd(),
+        env: { ...process.env, PYTHONUNBUFFERED: "1" },
+        stdio: ["ignore", "pipe", "pipe"],
+      });
 
-      logger.debug("Sandbox process spawned", { taskId, pythonPath: this.config.pythonPath, timeoutSec: this.config.workerTimeout });
+      logger.debug("Sandbox process spawned", {
+        taskId,
+        pythonPath: this.config.pythonPath,
+        timeoutSec: this.config.workerTimeout,
+      });
 
       const stdoutLines: string[] = [];
       const stderrChunks: string[] = [];
@@ -182,9 +197,7 @@ export class WorkerPool {
           timeoutSec: this.config.workerTimeout,
         });
         reject(
-          new Error(
-            `Sandbox timed out after ${this.config.workerTimeout}s for task ${taskId}`,
-          ),
+          new Error(`Sandbox timed out after ${this.config.workerTimeout}s for task ${taskId}`),
         );
       }, this.config.workerTimeout * 1000);
 
@@ -219,7 +232,12 @@ export class WorkerPool {
 
         const stderr = stderrChunks.join("");
 
-        logger.debug("Sandbox process exited", { taskId, exitCode: _code, stdoutLines: stdoutLines.length, stderrSize: stderr.length });
+        logger.debug("Sandbox process exited", {
+          taskId,
+          exitCode: _code,
+          stdoutLines: stdoutLines.length,
+          stderrSize: stderr.length,
+        });
 
         if (stderr) {
           const hasErrors = /error|exception|traceback|fatal|panic/i.test(stderr);
@@ -246,9 +264,7 @@ export class WorkerPool {
           resolve(JSON.parse(lastLine) as Handoff);
         } catch {
           reject(
-            new Error(
-              `Failed to parse sandbox output as Handoff JSON: ${lastLine.slice(0, 200)}`,
-            ),
+            new Error(`Failed to parse sandbox output as Handoff JSON: ${lastLine.slice(0, 200)}`),
           );
         }
       });

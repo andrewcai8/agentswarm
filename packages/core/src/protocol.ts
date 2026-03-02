@@ -1,4 +1,6 @@
-import type { Task, Handoff, SandboxStatus, TaskStatus } from "./types.js";
+/** @module Wire protocol message types for orchestrator-sandbox communication */
+
+import type { Handoff, SandboxStatus, Task, TaskStatus } from "./types.js";
 
 // Request: orchestrator → sandbox worker
 export interface TaskAssignment {
@@ -14,7 +16,7 @@ export interface TaskAssignment {
   };
 }
 
-// Response: sandbox → orchestrator  
+// Response: sandbox → orchestrator
 export interface TaskResult {
   type: "task_result";
   handoff: Handoff;

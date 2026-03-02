@@ -1,12 +1,27 @@
-import type { Task, Handoff, Tracer, Span } from "@longshot/core";
+/** @module Recursive task decomposer for breaking large tasks into worker-sized units (max depth 3) */
+
+import type { Handoff, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
-import type { TaskQueue } from "./task-queue.js";
-import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
-import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch, sleep, MAX_HANDOFF_SUMMARY_CHARS, MAX_FILES_PER_HANDOFF } from "./shared.js";
+import {
+  ConcurrencyLimiter,
+  cleanupPiSession,
+  createPlannerPiSession,
+  MAX_FILES_PER_HANDOFF,
+  MAX_HANDOFF_SUMMARY_CHARS,
+  type PiSessionResult,
+  parseLLMTaskArray,
+  parsePlannerResponse,
+  type RawTaskInput,
+  type RepoState,
+  readRepoState,
+  sleep,
+  slugifyForBranch,
+} from "./shared.js";
+import type { TaskQueue } from "./task-queue.js";
+import type { WorkerPool } from "./worker-pool.js";
 
 const logger = createLogger("subplanner", "subplanner");
 
@@ -42,7 +57,11 @@ export const DEFAULT_SUBPLANNER_CONFIG: SubplannerConfig = {
   maxSubtasks: 10,
 };
 
-export function aggregateHandoffs(parentTask: Task, subtasks: Task[], handoffs: Handoff[]): Handoff {
+export function aggregateHandoffs(
+  parentTask: Task,
+  subtasks: Task[],
+  handoffs: Handoff[],
+): Handoff {
   const completedCount = handoffs.filter((h) => h.status === "complete").length;
   const failedCount = handoffs.filter((h) => h.status === "failed").length;
   const totalSubtasks = subtasks.length;
@@ -58,10 +77,9 @@ export function aggregateHandoffs(parentTask: Task, subtasks: Task[], handoffs: 
     status = "blocked";
   }
 
-  const summaryParts = handoffs.map(
-    (h) => `[${h.taskId}] (${h.status}): ${h.summary}`
-  );
-  const summary = `Decomposed "${parentTask.description}" into ${totalSubtasks} subtasks. ` +
+  const summaryParts = handoffs.map((h) => `[${h.taskId}] (${h.status}): ${h.summary}`);
+  const summary =
+    `Decomposed "${parentTask.description}" into ${totalSubtasks} subtasks. ` +
     `${completedCount} complete, ${failedCount} failed, ` +
     `${totalSubtasks - completedCount - failedCount} other.\n\n` +
     summaryParts.join("\n");
@@ -107,7 +125,10 @@ export function aggregateHandoffs(parentTask: Task, subtasks: Task[], handoffs: 
     taskId: parentTask.id,
     status,
     summary,
-    diff: handoffs.map((h) => h.diff).filter(Boolean).join("\n"),
+    diff: handoffs
+      .map((h) => h.diff)
+      .filter(Boolean)
+      .join("\n"),
     filesChanged: Array.from(filesChangedSet),
     concerns: allConcerns,
     suggestions: allSuggestions,
@@ -136,7 +157,11 @@ export function createFailureHandoff(task: Task, error: Error): Handoff {
   };
 }
 
-export function shouldDecompose(task: Task, config: SubplannerConfig, currentDepth: number): boolean {
+export function shouldDecompose(
+  task: Task,
+  config: SubplannerConfig,
+  currentDepth: number,
+): boolean {
   if (currentDepth >= config.maxDepth) {
     return false;
   }
@@ -162,7 +187,11 @@ export class Subplanner {
   private dispatchLimiter: ConcurrencyLimiter;
 
   private subtaskCreatedCallbacks: ((subtask: Task, parentId: string) => void)[];
-  private subtaskCompletedCallbacks: ((subtask: Task, handoff: Handoff, parentId: string) => void)[];
+  private subtaskCompletedCallbacks: ((
+    subtask: Task,
+    handoff: Handoff,
+    parentId: string,
+  ) => void)[];
   private decompositionCallbacks: ((parentTask: Task, subtasks: Task[], depth: number) => void)[];
   private errorCallbacks: ((error: Error, parentTaskId: string) => void)[];
 
@@ -196,7 +225,11 @@ export class Subplanner {
     this.tracer = tracer;
   }
 
-  async decomposeAndExecute(parentTask: Task, depth: number = 0, parentSpan?: Span): Promise<Handoff> {
+  async decomposeAndExecute(
+    parentTask: Task,
+    depth: number = 0,
+    parentSpan?: Span,
+  ): Promise<Handoff> {
     const taskLogger = logger.withTask(parentTask.id);
     taskLogger.info("Starting subplanner decomposition", {
       parentTaskId: parentTask.id,
@@ -224,7 +257,13 @@ export class Subplanner {
     let consecutiveErrors = 0;
 
     try {
-      logger.debug("Subplanner decompose starting", { parentTaskId: parentTask.id, depth, description: parentTask.description.slice(0, 200), scope: parentTask.scope, acceptance: parentTask.acceptance.slice(0, 200) });
+      logger.debug("Subplanner decompose starting", {
+        parentTaskId: parentTask.id,
+        depth,
+        description: parentTask.description.slice(0, 200),
+        scope: parentTask.scope,
+        acceptance: parentTask.acceptance.slice(0, 200),
+      });
 
       const initialRepoState = await readRepoState(this.targetRepoPath);
 
@@ -241,15 +280,23 @@ export class Subplanner {
           const hasCapacity = activeTasks.size < this.config.maxWorkers;
           const hasEnoughHandoffs = handoffsSinceLastPlan.length >= MIN_HANDOFFS_FOR_REPLAN;
           const noActiveWork = activeTasks.size === 0 && iteration > 0;
-          const needsPlan = hasCapacity && (iteration === 0 || hasEnoughHandoffs || noActiveWork) && !planningDone;
+          const needsPlan =
+            hasCapacity && (iteration === 0 || hasEnoughHandoffs || noActiveWork) && !planningDone;
 
           if (needsPlan && piSession) {
             const session = piSession.session;
-            const repoState = iteration === 0 ? initialRepoState : await readRepoState(this.targetRepoPath);
+            const repoState =
+              iteration === 0 ? initialRepoState : await readRepoState(this.targetRepoPath);
 
-            const message = iteration === 0
-              ? this.buildInitialMessage(parentTask, repoState, depth)
-              : this.buildFollowUpMessage(repoState, handoffsSinceLastPlan, activeTasks, dispatchedTaskIds);
+            const message =
+              iteration === 0
+                ? this.buildInitialMessage(parentTask, repoState, depth)
+                : this.buildFollowUpMessage(
+                    repoState,
+                    handoffsSinceLastPlan,
+                    activeTasks,
+                    dispatchedTaskIds,
+                  );
 
             logger.info(`Subplanner planning iteration ${iteration + 1}`, {
               parentTaskId: parentTask.id,
@@ -266,10 +313,16 @@ export class Subplanner {
             this.monitor.recordTokenUsage(tokenDelta);
 
             const responseText = session.getLastAssistantText();
-            logger.debug("Subplanner LLM response", { parentTaskId: parentTask.id, responseLength: responseText?.length ?? 0, preview: responseText?.slice(0, 500) ?? "" });
+            logger.debug("Subplanner LLM response", {
+              parentTaskId: parentTask.id,
+              responseLength: responseText?.length ?? 0,
+              preview: responseText?.slice(0, 500) ?? "",
+            });
 
             if (!responseText) {
-              logger.warn("Pi session returned no text for subplanner", { parentTaskId: parentTask.id });
+              logger.warn("Pi session returned no text for subplanner", {
+                parentTaskId: parentTask.id,
+              });
               handoffsSinceLastPlan = [];
               iteration++;
               consecutiveErrors = 0;
@@ -278,7 +331,8 @@ export class Subplanner {
                 planningDone = true;
               }
             } else {
-              const { scratchpad: newScratchpad, tasks: rawTasks } = parsePlannerResponse(responseText);
+              const { scratchpad: newScratchpad, tasks: rawTasks } =
+                parsePlannerResponse(responseText);
               if (newScratchpad) {
                 scratchpad = newScratchpad;
               }
@@ -292,7 +346,9 @@ export class Subplanner {
 
               if (tasks.length === 0 && activeTasks.size === 0) {
                 if (iteration === 1) {
-                  taskLogger.info("LLM returned no subtasks — task is atomic, dispatching to worker directly");
+                  taskLogger.info(
+                    "LLM returned no subtasks — task is atomic, dispatching to worker directly",
+                  );
                   cleanupPiSession(session, piSession.tempDir);
                   piSession = null;
                   const handoff = await this.executeAsWorkerTask(parentTask, span);
@@ -316,7 +372,15 @@ export class Subplanner {
                   iteration,
                 });
 
-                this.dispatchSubtasksBatch(tasks, parentTask, depth, pendingHandoffs, activeTasks, dispatchedTaskIds, parentSpan);
+                this.dispatchSubtasksBatch(
+                  tasks,
+                  parentTask,
+                  depth,
+                  pendingHandoffs,
+                  activeTasks,
+                  dispatchedTaskIds,
+                  parentSpan,
+                );
               }
             }
           }
@@ -324,7 +388,12 @@ export class Subplanner {
           if (planningDone && activeTasks.size === 0) {
             break;
           }
-          if (!planningDone && activeTasks.size === 0 && iteration > 0 && handoffsSinceLastPlan.length === 0) {
+          if (
+            !planningDone &&
+            activeTasks.size === 0 &&
+            iteration > 0 &&
+            handoffsSinceLastPlan.length === 0
+          ) {
             break;
           }
 
@@ -334,24 +403,30 @@ export class Subplanner {
           consecutiveErrors++;
 
           const backoffMs = Math.min(
-            BACKOFF_BASE_MS * Math.pow(2, consecutiveErrors - 1),
+            BACKOFF_BASE_MS * 2 ** (consecutiveErrors - 1),
             BACKOFF_MAX_MS,
           );
 
-          logger.error(`Subplanner planning failed (attempt ${consecutiveErrors}), retrying in ${(backoffMs / 1000).toFixed(0)}s`, {
-            error: err.message,
-            parentTaskId: parentTask.id,
-            consecutiveErrors,
-            iteration: iteration + 1,
-            activeTasks: activeTasks.size,
-          });
+          logger.error(
+            `Subplanner planning failed (attempt ${consecutiveErrors}), retrying in ${(backoffMs / 1000).toFixed(0)}s`,
+            {
+              error: err.message,
+              parentTaskId: parentTask.id,
+              consecutiveErrors,
+              iteration: iteration + 1,
+              activeTasks: activeTasks.size,
+            },
+          );
 
           for (const cb of this.errorCallbacks) {
             cb(err, parentTask.id);
           }
 
           if (consecutiveErrors >= MAX_CONSECUTIVE_ERRORS) {
-            logger.error(`Aborting subplanner after ${MAX_CONSECUTIVE_ERRORS} consecutive failures`, { parentTaskId: parentTask.id });
+            logger.error(
+              `Aborting subplanner after ${MAX_CONSECUTIVE_ERRORS} consecutive failures`,
+              { parentTaskId: parentTask.id },
+            );
             break;
           }
 
@@ -414,7 +489,11 @@ export class Subplanner {
 
     msg += `This is the initial planning call. Respond with a JSON object: { "scratchpad": "your analysis and plan", "tasks": [{ "id": "...", "description": "...", "scope": ["..."], "acceptance": "...", "priority": N }] }. If the task is atomic (no decomposition needed), return an empty tasks array.\n`;
 
-    logger.debug("Built initial subplanner prompt", { length: msg.length, parentTaskId: parentTask.id, depth });
+    logger.debug("Built initial subplanner prompt", {
+      length: msg.length,
+      parentTaskId: parentTask.id,
+      depth,
+    });
     return msg;
   }
 
@@ -437,14 +516,19 @@ export class Subplanner {
       for (const h of newHandoffs) {
         msg += `### Task ${h.taskId} — ${h.status}\n`;
 
-        const summary = h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
-          ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "\u2026"
-          : h.summary;
+        const summary =
+          h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
+            ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "\u2026"
+            : h.summary;
         msg += `Summary: ${summary}\n`;
 
-        const files = h.filesChanged.length > MAX_FILES_PER_HANDOFF
-          ? [...h.filesChanged.slice(0, MAX_FILES_PER_HANDOFF), `... (${h.filesChanged.length - MAX_FILES_PER_HANDOFF} more)`]
-          : h.filesChanged;
+        const files =
+          h.filesChanged.length > MAX_FILES_PER_HANDOFF
+            ? [
+                ...h.filesChanged.slice(0, MAX_FILES_PER_HANDOFF),
+                `... (${h.filesChanged.length - MAX_FILES_PER_HANDOFF} more)`,
+              ]
+            : h.filesChanged;
         msg += `Files changed: ${files.join(", ")}\n`;
 
         if (h.concerns.length > 0) msg += `Concerns: ${h.concerns.join("; ")}\n`;
@@ -464,7 +548,12 @@ export class Subplanner {
 
     msg += `Continue planning. Review the new handoffs and current state. Rewrite your scratchpad and emit the next batch of subtasks as JSON: { "scratchpad": "...", "tasks": [...] }. Subtask ID deduplication is handled automatically — do not re-emit previously used IDs. Return empty tasks array if all work is done.\n`;
 
-    logger.debug("Built follow-up subplanner prompt", { length: msg.length, newHandoffs: newHandoffs.length, activeTasks: activeTasks.size, dispatchedIds: dispatchedTaskIds.size });
+    logger.debug("Built follow-up subplanner prompt", {
+      length: msg.length,
+      newHandoffs: newHandoffs.length,
+      activeTasks: activeTasks.size,
+      dispatchedIds: dispatchedTaskIds.size,
+    });
     return msg;
   }
 
@@ -482,7 +571,10 @@ export class Subplanner {
       const id = raw.id || `${parentTask.id}-sub-${subCounter}`;
 
       if (dispatchedTaskIds.has(id)) {
-        logger.warn("Skipping duplicate subtask ID from LLM", { subtaskId: id, parentTaskId: parentTask.id });
+        logger.warn("Skipping duplicate subtask ID from LLM", {
+          subtaskId: id,
+          parentTaskId: parentTask.id,
+        });
         continue;
       }
 
@@ -497,7 +589,9 @@ export class Subplanner {
         });
         validScope = validScope.filter((f) => parentTask.scope.includes(f));
         if (validScope.length === 0) {
-          logger.warn("Subtask has no valid scope files after filtering — skipping", { subtaskId: id });
+          logger.warn("Subtask has no valid scope files after filtering — skipping", {
+            subtaskId: id,
+          });
           continue;
         }
       }
@@ -508,7 +602,8 @@ export class Subplanner {
         description: raw.description,
         scope: validScope,
         acceptance: raw.acceptance || "",
-        branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
+        branch:
+          raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
         status: "pending" as const,
         createdAt: Date.now(),
         priority: raw.priority || parentTask.priority,
@@ -518,7 +613,13 @@ export class Subplanner {
     }
 
     for (const st of subtasks) {
-      logger.debug("Subtask created", { id: st.id, parentId: parentTask.id, description: st.description.slice(0, 200), scope: st.scope, priority: st.priority });
+      logger.debug("Subtask created", {
+        id: st.id,
+        parentId: parentTask.id,
+        description: st.description.slice(0, 200),
+        scope: st.scope,
+        priority: st.priority,
+      });
     }
 
     if (subtasks.length > this.subplannerConfig.maxSubtasks) {
@@ -553,12 +654,23 @@ export class Subplanner {
 
       const promise = (async () => {
         await this.dispatchLimiter.acquire();
-        logger.debug("Subtask dispatch acquired slot", { subtaskId: subtask.id, limiterActive: this.dispatchLimiter.getActive(), limiterQueued: this.dispatchLimiter.getQueueLength() });
+        logger.debug("Subtask dispatch acquired slot", {
+          subtaskId: subtask.id,
+          limiterActive: this.dispatchLimiter.getActive(),
+          limiterQueued: this.dispatchLimiter.getQueueLength(),
+        });
 
         try {
           let handoff: Handoff;
 
-          logger.debug("Subtask dispatch decision", { subtaskId: subtask.id, scopeSize: subtask.scope.length, willDecompose: shouldDecompose(subtask, this.subplannerConfig, currentDepth + 1), currentDepth, maxDepth: this.subplannerConfig.maxDepth, scopeThreshold: this.subplannerConfig.scopeThreshold });
+          logger.debug("Subtask dispatch decision", {
+            subtaskId: subtask.id,
+            scopeSize: subtask.scope.length,
+            willDecompose: shouldDecompose(subtask, this.subplannerConfig, currentDepth + 1),
+            currentDepth,
+            maxDepth: this.subplannerConfig.maxDepth,
+            scopeThreshold: this.subplannerConfig.scopeThreshold,
+          });
 
           if (shouldDecompose(subtask, this.subplannerConfig, currentDepth + 1)) {
             logger.info("Subtask still complex — recursing", {
@@ -615,7 +727,10 @@ export class Subplanner {
 
       promise.catch((error) => {
         const err = error instanceof Error ? error : new Error(String(error));
-        logger.error("Unhandled subtask dispatch error", { subtaskId: subtask.id, error: err.message });
+        logger.error("Unhandled subtask dispatch error", {
+          subtaskId: subtask.id,
+          error: err.message,
+        });
         activeTasks.delete(subtask.id);
         for (const cb of this.errorCallbacks) {
           cb(err, parentTask.id);

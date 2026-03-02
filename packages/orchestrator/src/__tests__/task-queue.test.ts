@@ -1,7 +1,7 @@
-import { describe, it } from "node:test";
 import assert from "node:assert/strict";
-import { PriorityQueue, TaskQueue } from "../task-queue.js";
+import { describe, it } from "node:test";
 import type { Task, TaskStatus } from "@longshot/core";
+import { PriorityQueue, TaskQueue } from "../task-queue.js";
 
 /**
  * Helper function to create test tasks
@@ -162,7 +162,7 @@ describe("TaskQueue", () => {
     assert.throws(
       () => taskQueue.enqueue(task),
       /Only pending tasks can be enqueued/,
-      "Should throw when enqueuing non-pending task"
+      "Should throw when enqueuing non-pending task",
     );
   });
 
@@ -265,14 +265,22 @@ describe("TaskQueue", () => {
     const pendingTask = makeTask({ id: "task-pending" });
     taskQueue.enqueue(pendingTask);
     taskQueue.cancelTask(pendingTask.id);
-    assert.strictEqual(taskQueue.getById(pendingTask.id)?.status, "cancelled", "Pending task should be cancelled");
+    assert.strictEqual(
+      taskQueue.getById(pendingTask.id)?.status,
+      "cancelled",
+      "Pending task should be cancelled",
+    );
 
     // Cancel from assigned
     const assignedTask = makeTask({ id: "task-assigned" });
     taskQueue.enqueue(assignedTask);
     taskQueue.assignTask(assignedTask.id, "sandbox-1");
     taskQueue.cancelTask(assignedTask.id);
-    assert.strictEqual(taskQueue.getById(assignedTask.id)?.status, "cancelled", "Assigned task should be cancelled");
+    assert.strictEqual(
+      taskQueue.getById(assignedTask.id)?.status,
+      "cancelled",
+      "Assigned task should be cancelled",
+    );
 
     // Cancel from running
     const runningTask = makeTask({ id: "task-running" });
@@ -280,7 +288,11 @@ describe("TaskQueue", () => {
     taskQueue.assignTask(runningTask.id, "sandbox-2");
     taskQueue.startTask(runningTask.id);
     taskQueue.cancelTask(runningTask.id);
-    assert.strictEqual(taskQueue.getById(runningTask.id)?.status, "cancelled", "Running task should be cancelled");
+    assert.strictEqual(
+      taskQueue.getById(runningTask.id)?.status,
+      "cancelled",
+      "Running task should be cancelled",
+    );
   });
 
   it("invalid transition throws", () => {
@@ -292,7 +304,7 @@ describe("TaskQueue", () => {
     assert.throws(
       () => taskQueue.updateStatus(task.id, "running"),
       /Invalid transition/,
-      "Should throw on invalid transition from pending to running"
+      "Should throw on invalid transition from pending to running",
     );
   });
 
@@ -308,7 +320,7 @@ describe("TaskQueue", () => {
     const callback: (t: Task, oldStatus: TaskStatus, newStatus: TaskStatus) => void = (
       t,
       oldStatus,
-      newStatus
+      newStatus,
     ) => {
       callbackCalled = true;
       capturedTask = t;
@@ -410,12 +422,20 @@ describe("TaskQueue", () => {
       const task = makeTask({ id: "retry-2" });
 
       taskQueue.enqueue(task);
-      assert.strictEqual(taskQueue.retryTask("retry-2"), false, "retryTask should return false for pending task");
+      assert.strictEqual(
+        taskQueue.retryTask("retry-2"),
+        false,
+        "retryTask should return false for pending task",
+      );
     });
 
     it("returns false for non-existent tasks", () => {
       const taskQueue = new TaskQueue();
-      assert.strictEqual(taskQueue.retryTask("nonexistent"), false, "retryTask should return false for missing task");
+      assert.strictEqual(
+        taskQueue.retryTask("nonexistent"),
+        false,
+        "retryTask should return false for missing task",
+      );
     });
 
     it("increments retryCount on successive retries", () => {
@@ -427,13 +447,21 @@ describe("TaskQueue", () => {
       taskQueue.startTask("retry-3");
       taskQueue.failTask("retry-3");
       taskQueue.retryTask("retry-3");
-      assert.strictEqual(taskQueue.getById("retry-3")?.retryCount, 1, "retryCount should be 1 after first retry");
+      assert.strictEqual(
+        taskQueue.getById("retry-3")?.retryCount,
+        1,
+        "retryCount should be 1 after first retry",
+      );
 
       taskQueue.assignTask("retry-3", "s2");
       taskQueue.startTask("retry-3");
       taskQueue.failTask("retry-3");
       taskQueue.retryTask("retry-3");
-      assert.strictEqual(taskQueue.getById("retry-3")?.retryCount, 2, "retryCount should be 2 after second retry");
+      assert.strictEqual(
+        taskQueue.getById("retry-3")?.retryCount,
+        2,
+        "retryCount should be 2 after second retry",
+      );
     });
 
     it("fires status change callback on retry", () => {

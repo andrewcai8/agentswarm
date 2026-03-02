@@ -1,0 +1,25 @@
+# Longshot CODEOWNERS
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+* @andrewcai8
+
+# TypeScript packages
+/packages/core/          @andrewcai8
+/packages/orchestrator/  @andrewcai8
+/packages/sandbox/       @andrewcai8
+/packages/mcp-server/    @andrewcai8
+
+# Python CLI
+/main.py                 @andrewcai8
+/dashboard.py            @andrewcai8
+/pyproject.toml          @andrewcai8
+
+# LLM system prompts
+/prompts/                @andrewcai8
+
+# Infrastructure
+/infra/                  @andrewcai8
+
+# CI/CD and repo config
+/.github/                @andrewcai8

@@ -1,7 +1,9 @@
+/** @module Health monitoring and metrics snapshot collection for orchestrator state reporting */
+
 import type { MetricsSnapshot } from "@longshot/core";
 import { createLogger } from "@longshot/core";
-import type { WorkerPool, Worker } from "./worker-pool.js";
 import type { TaskQueue } from "./task-queue.js";
+import type { Worker, WorkerPool } from "./worker-pool.js";
 
 const logger = createLogger("monitor", "root-planner");
 
@@ -93,7 +95,12 @@ export class Monitor {
       if (this.isWorkerTimedOut(worker)) {
         const taskId = worker.currentTask.id;
         const elapsedSec = Math.round((Date.now() - worker.startedAt) / 1000);
-        logger.debug("Worker timeout check failed", { workerId: worker.id, taskId, elapsedSec, timeoutSec: this.config.workerTimeout });
+        logger.debug("Worker timeout check failed", {
+          workerId: worker.id,
+          taskId,
+          elapsedSec,
+          timeoutSec: this.config.workerTimeout,
+        });
         logger.error("Worker timed out", { workerId: worker.id, taskId });
         for (const cb of this.onTimeoutCallbacks) {
           cb(worker.id, taskId);
@@ -170,7 +177,11 @@ export class Monitor {
 
   recordSuspiciousTask(taskId: string, reason: string): void {
     this.suspiciousTaskCount++;
-    logger.warn("Suspicious task detected", { taskId, reason, totalSuspicious: this.suspiciousTaskCount });
+    logger.warn("Suspicious task detected", {
+      taskId,
+      reason,
+      totalSuspicious: this.suspiciousTaskCount,
+    });
   }
 
   setFinalizationMetrics(metrics: {

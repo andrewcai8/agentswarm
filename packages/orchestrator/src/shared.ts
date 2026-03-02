@@ -1,9 +1,12 @@
+/** @module Shared utilities — repository state reader, response parser, concurrency limiter, and git mutex */
+
+import { spawn } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
-import { mkdtempSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createLogger, getRecentCommits, getFileTree } from "@longshot/core";
-import { spawn } from "node:child_process";
+import { createLogger, getFileTree, getRecentCommits } from "@longshot/core";
+import type { AgentSession, BashOperations } from "@mariozechner/pi-coding-agent";
 import {
   AuthStorage,
   createAgentSession,
@@ -13,8 +16,6 @@ import {
   SessionManager,
   SettingsManager,
 } from "@mariozechner/pi-coding-agent";
-import type { AgentSession } from "@mariozechner/pi-coding-agent";
-import type { BashOperations } from "@mariozechner/pi-coding-agent";
 import type { LLMConfig } from "./config.js";
 
 const logger = createLogger("shared", "root-planner");
@@ -46,10 +47,7 @@ export async function readRepoState(targetRepoPath: string): Promise<RepoState> 
   let fileTree = await getFileTree(cwd);
   if (fileTree.length > MAX_FILE_TREE_ENTRIES) {
     const truncated = fileTree.length - MAX_FILE_TREE_ENTRIES;
-    fileTree = [
-      ...fileTree.slice(0, MAX_FILE_TREE_ENTRIES),
-      `... (${truncated} more files)`,
-    ];
+    fileTree = [...fileTree.slice(0, MAX_FILE_TREE_ENTRIES), `... (${truncated} more files)`];
   }
 
   const commits = await getRecentCommits(40, cwd);
@@ -58,9 +56,10 @@ export async function readRepoState(targetRepoPath: string): Promise<RepoState> 
   let featuresJson: string | null = null;
   try {
     const raw = await readFile(join(cwd, "FEATURES.json"), "utf-8");
-    featuresJson = raw.length > MAX_FEATURES_JSON_CHARS
-      ? raw.slice(0, MAX_FEATURES_JSON_CHARS) + "\n... (truncated)"
-      : raw;
+    featuresJson =
+      raw.length > MAX_FEATURES_JSON_CHARS
+        ? raw.slice(0, MAX_FEATURES_JSON_CHARS) + "\n... (truncated)"
+        : raw;
   } catch {
     // FEATURES.json may not exist yet
   }
@@ -154,11 +153,11 @@ const BRANCH_SLUG_MAX_LENGTH = 50;
 export function slugifyForBranch(description: string): string {
   return description
     .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")   // non-alphanumeric → hyphens
-    .replace(/^-+|-+$/g, "")       // trim leading/trailing hyphens
-    .replace(/-{2,}/g, "-")        // collapse consecutive hyphens
+    .replace(/[^a-z0-9]+/g, "-") // non-alphanumeric → hyphens
+    .replace(/^-+|-+$/g, "") // trim leading/trailing hyphens
+    .replace(/-{2,}/g, "-") // collapse consecutive hyphens
     .slice(0, BRANCH_SLUG_MAX_LENGTH)
-    .replace(/-+$/, "");           // trim trailing hyphen after truncation
+    .replace(/-+$/, ""); // trim trailing hyphen after truncation
 }
 
 const GIT_READONLY_SUBCOMMANDS = new Set([
@@ -260,7 +259,7 @@ function salvageTruncatedResponse(content: string): PlannerResponseResult {
     if (ch === '"') {
       i++;
       while (i < remainder.length) {
-        if (remainder[i] === '\\') {
+        if (remainder[i] === "\\") {
           i++;
         } else if (remainder[i] === '"') {
           break;
@@ -270,10 +269,10 @@ function salvageTruncatedResponse(content: string): PlannerResponseResult {
       continue;
     }
 
-    if (ch === '{') {
+    if (ch === "{") {
       if (depth === 0) objStart = i;
       depth++;
-    } else if (ch === '}') {
+    } else if (ch === "}") {
       depth--;
       if (depth === 0 && objStart !== -1) {
         const objStr = remainder.slice(objStart, i + 1);
@@ -307,7 +306,12 @@ export function parsePlannerResponse(content: string): PlannerResponseResult {
       const candidate = cleaned.slice(objStart, objEnd + 1);
       const parsed = JSON.parse(candidate);
 
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed) && Array.isArray(parsed.tasks)) {
+      if (
+        parsed &&
+        typeof parsed === "object" &&
+        !Array.isArray(parsed) &&
+        Array.isArray(parsed.tasks)
+      ) {
         return {
           scratchpad: typeof parsed.scratchpad === "string" ? parsed.scratchpad : "",
           tasks: parsed.tasks,
@@ -356,14 +360,17 @@ export function parseLLMTaskArray(content: string): RawTaskInput[] {
     if (!Array.isArray(parsed)) {
       throw new Error("LLM response is not an array");
     }
-    logger.debug("Parsed LLM task array", { taskCount: parsed.length, contentLength: content.length });
+    logger.debug("Parsed LLM task array", {
+      taskCount: parsed.length,
+      contentLength: content.length,
+    });
     return parsed;
   } catch (error) {
     logger.error("Failed to parse LLM response as tasks", {
       content: content.slice(0, 500),
     });
     throw new Error(
-      `Failed to parse LLM task decomposition: ${error instanceof Error ? error.message : String(error)}`
+      `Failed to parse LLM task decomposition: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
 }
@@ -390,19 +397,21 @@ function registerPiModel(llmConfig: LLMConfig) {
     baseUrl: endpoint.endpoint + "/v1",
     apiKey: endpoint.apiKey || "no-key-needed",
     api: "openai-completions",
-    models: [{
-      id: llmConfig.model,
-      name: llmConfig.model,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 131072,
-      maxTokens: llmConfig.maxTokens,
-      compat: {
-        maxTokensField: "max_tokens",
-        supportsUsageInStreaming: true,
+    models: [
+      {
+        id: llmConfig.model,
+        name: llmConfig.model,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: llmConfig.maxTokens,
+        compat: {
+          maxTokensField: "max_tokens",
+          supportsUsageInStreaming: true,
+        },
       },
-    }],
+    ],
   });
 
   const model = modelRegistry.find("longshot", llmConfig.model);

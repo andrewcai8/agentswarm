@@ -1,19 +1,16 @@
+/** @module Modal sandbox worker harness — orchestrates pi-coding-agent execution within cloud sandboxes */
+
 import { execSync } from "node:child_process";
+import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { readFileSync, writeFileSync, existsSync, appendFileSync } from "node:fs";
-import type { Task, Handoff } from "@longshot/core";
-import {
-  enableTracing,
-  closeTracing,
-  Tracer,
-  type Span,
-} from "@longshot/core";
+import type { Handoff, Task } from "@longshot/core";
+import { closeTracing, enableTracing, type Span, Tracer } from "@longshot/core";
 import {
   AuthStorage,
-  createAgentSession,
   codingTools,
-  grepTool,
+  createAgentSession,
   findTool,
+  grepTool,
   lsTool,
   ModelRegistry,
   SessionManager,
@@ -157,19 +154,21 @@ export async function runWorker(): Promise<void> {
     baseUrl: llmConfig.endpoint,
     apiKey: llmConfig.apiKey || "no-key-needed",
     api: "openai-completions",
-    models: [{
-      id: llmConfig.model,
-      name: llmConfig.model,
-      reasoning: false,
-      input: ["text"],
-      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-      contextWindow: 131072,
-      maxTokens: llmConfig.maxTokens,
-      compat: {
-        maxTokensField: "max_tokens",
-        supportsUsageInStreaming: true,
+    models: [
+      {
+        id: llmConfig.model,
+        name: llmConfig.model,
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 131072,
+        maxTokens: llmConfig.maxTokens,
+        compat: {
+          maxTokensField: "max_tokens",
+          supportsUsageInStreaming: true,
+        },
       },
-    }],
+    ],
   });
 
   const model = modelRegistry.find("glm5", llmConfig.model);
@@ -269,10 +268,7 @@ export async function runWorker(): Promise<void> {
     safeExec("git add -A", WORK_DIR);
     const stagedFiles = safeExec("git diff --cached --name-only", WORK_DIR);
     if (stagedFiles) {
-      safeExec(
-        `git commit -m "feat(${task.id}): auto-commit uncommitted changes"`,
-        WORK_DIR,
-      );
+      safeExec(`git commit -m "feat(${task.id}): auto-commit uncommitted changes"`, WORK_DIR);
       log(`Safety-net commit created (${stagedFiles.split("\n").length} files).`);
     }
   } else {
@@ -327,14 +323,14 @@ export async function runWorker(): Promise<void> {
     status: isEmptyResponse ? "failed" : "complete",
     summary: isEmptyResponse
       ? "Task failed: LLM returned empty response (0 tokens, 0 tool calls). Possible API/endpoint failure."
-      : (lastAssistantMessage || "Task completed (no final message captured)."),
+      : lastAssistantMessage || "Task completed (no final message captured).",
     diff,
     filesChanged,
     concerns: isEmptyResponse
       ? ["Empty LLM response — possible API failure or model endpoint issue"]
-      : (buildExitCode !== null && buildExitCode !== 0
-          ? [`Post-agent build check failed (tsc exit code ${buildExitCode})`]
-          : []),
+      : buildExitCode !== null && buildExitCode !== 0
+        ? [`Post-agent build check failed (tsc exit code ${buildExitCode})`]
+        : [],
     suggestions: isEmptyResponse
       ? ["Check LLM endpoint connectivity", "Verify model is available in sandbox environment"]
       : [],
@@ -363,7 +359,9 @@ export async function runWorker(): Promise<void> {
   closeTracing();
 
   writeResult(handoff);
-  log(`Done. Duration: ${handoff.metrics.durationMs}ms, Tools: ${toolCallCount}, Tokens: ${tokensUsed}`);
+  log(
+    `Done. Duration: ${handoff.metrics.durationMs}ms, Tools: ${toolCallCount}, Tokens: ${tokensUsed}`,
+  );
 }
 
 function readTaskIdSafe(): string {

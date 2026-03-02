@@ -1,9 +1,9 @@
-import { describe, it, before, after } from "node:test";
 import assert from "node:assert/strict";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { execSync } from "node:child_process";
+import fs from "node:fs/promises";
 import os from "node:os";
+import path from "node:path";
+import { after, before, describe, it } from "node:test";
 
 import { buildHandoff } from "../handoff.js";
 
@@ -18,7 +18,7 @@ async function initGitRepo(dir: string): Promise<void> {
   execSync("git init", { cwd: dir });
   execSync('git config user.name "Test"', { cwd: dir });
   execSync('git config user.email "test@test.com"', { cwd: dir });
-  execSync('git config init.defaultBranch main', { cwd: dir });
+  execSync("git config init.defaultBranch main", { cwd: dir });
   await fs.writeFile(path.join(dir, "README.md"), "# Test\n");
   execSync("git add -A && git commit -m 'initial'", { cwd: dir });
 }
@@ -57,9 +57,24 @@ describe("TaskPayload parsing", () => {
 
   it("handles payload with optional apiKey", () => {
     const json = JSON.stringify({
-      task: { id: "task-002", description: "test", scope: [], acceptance: "", branch: "worker/task-002", status: "pending", createdAt: Date.now(), priority: 5 },
+      task: {
+        id: "task-002",
+        description: "test",
+        scope: [],
+        acceptance: "",
+        branch: "worker/task-002",
+        status: "pending",
+        createdAt: Date.now(),
+        priority: 5,
+      },
       systemPrompt: "prompt",
-      llmConfig: { endpoint: "https://api.example.com", model: "glm-5", maxTokens: 4096, temperature: 0.2, apiKey: "sk-test" },
+      llmConfig: {
+        endpoint: "https://api.example.com",
+        model: "glm-5",
+        maxTokens: 4096,
+        temperature: 0.2,
+        apiKey: "sk-test",
+      },
     });
 
     const parsed = JSON.parse(json);
@@ -68,9 +83,23 @@ describe("TaskPayload parsing", () => {
 
   it("handles payload without repoUrl", () => {
     const json = JSON.stringify({
-      task: { id: "task-003", description: "test", scope: [], acceptance: "", branch: "worker/task-003", status: "pending", createdAt: Date.now(), priority: 5 },
+      task: {
+        id: "task-003",
+        description: "test",
+        scope: [],
+        acceptance: "",
+        branch: "worker/task-003",
+        status: "pending",
+        createdAt: Date.now(),
+        priority: 5,
+      },
       systemPrompt: "prompt",
-      llmConfig: { endpoint: "https://api.example.com", model: "glm-5", maxTokens: 4096, temperature: 0.2 },
+      llmConfig: {
+        endpoint: "https://api.example.com",
+        model: "glm-5",
+        maxTokens: 4096,
+        temperature: 0.2,
+      },
     });
 
     const parsed = JSON.parse(json);

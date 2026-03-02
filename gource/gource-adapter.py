@@ -29,7 +29,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import math
 import random
 import re
 import sys
@@ -39,18 +38,18 @@ import time
 
 ROLE_COLOURS = {
     "root-planner": "88CCEE",
-    "planner":      "A5B4FC",
-    "subplanner":   "C4B5FD",
-    "worker":       "86EFAC",
-    "reconciler":   "FDE68A",
+    "planner": "A5B4FC",
+    "subplanner": "C4B5FD",
+    "worker": "86EFAC",
+    "reconciler": "FDE68A",
 }
 
 STATUS_COLOURS = {
     "complete": "00AAFF",
-    "failed":   "FF0000",
-    "merged":   "AA00FF",
+    "failed": "FF0000",
+    "merged": "AA00FF",
     "conflict": "FF4444",
-    "cancelled":"666666",
+    "cancelled": "666666",
 }
 
 # ── State ────────────────────────────────────────────────────────────────────
@@ -119,6 +118,7 @@ def _emit(ts: int, user: str, action: str, path: str, colour: str):
 
 
 # ── NDJSON → Gource ─────────────────────────────────────────────────────────
+
 
 def process_event(event: dict) -> None:
     msg = event.get("message", "")
@@ -198,6 +198,7 @@ def process_event(event: dict) -> None:
 
 # ── SSE parser ───────────────────────────────────────────────────────────────
 
+
 def _read_sse(stream):
     for line in stream:
         line = line.strip()
@@ -213,16 +214,26 @@ def _read_sse(stream):
 # so Gource has time to animate.
 
 DEMO_DESCS = [
-    "Implement chunk meshing system", "Add block face culling",
-    "Create player controller", "Setup WebGL2 renderer",
-    "Build terrain noise generator", "Add skybox shader",
-    "Implement block placement", "Create inventory UI overlay",
-    "Add ambient occlusion", "Build water flow simulation",
-    "Setup collision detection", "Create world save/load",
-    "Add fog distance shader", "Implement biome blending",
-    "Build particle system", "Add block breaking animation",
-    "Create crafting grid UI", "Implement greedy meshing",
-    "Add texture atlas packer", "Build chunk LOD system",
+    "Implement chunk meshing system",
+    "Add block face culling",
+    "Create player controller",
+    "Setup WebGL2 renderer",
+    "Build terrain noise generator",
+    "Add skybox shader",
+    "Implement block placement",
+    "Create inventory UI overlay",
+    "Add ambient occlusion",
+    "Build water flow simulation",
+    "Setup collision detection",
+    "Create world save/load",
+    "Add fog distance shader",
+    "Implement biome blending",
+    "Build particle system",
+    "Add block breaking animation",
+    "Create crafting grid UI",
+    "Implement greedy meshing",
+    "Add texture atlas packer",
+    "Build chunk LOD system",
 ]
 
 
@@ -250,20 +261,56 @@ def run_demo(max_agents: int, total_features: int, save_path: str | None):
 
     # Minecraft systems — many top-level branches to spread wide
     SYSTEMS = [
-        "chunk-meshing", "block-physics", "redstone-sim", "mob-ai",
-        "terrain-gen", "biome-blend", "skybox-shader", "water-flow",
-        "inventory-ui", "crafting-grid", "world-save", "multiplayer-net",
-        "particle-fx", "lighting-engine", "collision", "texture-atlas",
-        "entity-render", "nbt-parser", "command-block", "enchantment-sys",
-        "world-gen", "chunk-loading", "block-registry", "recipe-sys",
-        "pathfinding", "spawn-logic", "weather-sim", "sound-engine",
-        "chat-system", "scoreboard", "dimension-mgr", "loot-tables",
+        "chunk-meshing",
+        "block-physics",
+        "redstone-sim",
+        "mob-ai",
+        "terrain-gen",
+        "biome-blend",
+        "skybox-shader",
+        "water-flow",
+        "inventory-ui",
+        "crafting-grid",
+        "world-save",
+        "multiplayer-net",
+        "particle-fx",
+        "lighting-engine",
+        "collision",
+        "texture-atlas",
+        "entity-render",
+        "nbt-parser",
+        "command-block",
+        "enchantment-sys",
+        "world-gen",
+        "chunk-loading",
+        "block-registry",
+        "recipe-sys",
+        "pathfinding",
+        "spawn-logic",
+        "weather-sim",
+        "sound-engine",
+        "chat-system",
+        "scoreboard",
+        "dimension-mgr",
+        "loot-tables",
     ]
 
     VERBS = [
-        "optimize", "refactor", "debug", "implement", "test",
-        "benchmark", "wire-up", "integrate", "fix", "extend",
-        "compile", "validate", "serialize", "render", "dispatch",
+        "optimize",
+        "refactor",
+        "debug",
+        "implement",
+        "test",
+        "benchmark",
+        "wire-up",
+        "integrate",
+        "fix",
+        "extend",
+        "compile",
+        "validate",
+        "serialize",
+        "render",
+        "dispatch",
     ]
 
     # Many distinct named agents
@@ -386,18 +433,22 @@ def run_demo(max_agents: int, total_features: int, save_path: str | None):
 
 # ── Main ─────────────────────────────────────────────────────────────────────
 
+
 def main():
     ap = argparse.ArgumentParser(description="Longshot → Gource adapter")
-    ap.add_argument("--sse", action="store_true",
-                    help="Read SSE (text/event-stream) from stdin instead of raw NDJSON")
-    ap.add_argument("--demo", action="store_true",
-                    help="Generate standalone demo log (no orchestrator needed)")
-    ap.add_argument("--save", metavar="FILE",
-                    help="With --demo: save to file instead of stdout")
-    ap.add_argument("--agents", type=int, default=20,
-                    help="Demo: max concurrent agents (default 20)")
-    ap.add_argument("--features", type=int, default=60,
-                    help="Demo: total features (default 60)")
+    ap.add_argument(
+        "--sse",
+        action="store_true",
+        help="Read SSE (text/event-stream) from stdin instead of raw NDJSON",
+    )
+    ap.add_argument(
+        "--demo", action="store_true", help="Generate standalone demo log (no orchestrator needed)"
+    )
+    ap.add_argument("--save", metavar="FILE", help="With --demo: save to file instead of stdout")
+    ap.add_argument(
+        "--agents", type=int, default=20, help="Demo: max concurrent agents (default 20)"
+    )
+    ap.add_argument("--features", type=int, default=60, help="Demo: total features (default 60)")
     args = ap.parse_args()
 
     try:

@@ -1,3 +1,5 @@
+/** @module File-level scope tracking to prevent concurrent modifications to the same files */
+
 import { createLogger } from "@longshot/core";
 
 const logger = createLogger("scope-tracker", "root-planner");

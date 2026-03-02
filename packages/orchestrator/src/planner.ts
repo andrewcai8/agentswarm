@@ -1,16 +1,30 @@
-import type { Task, Handoff } from "@longshot/core";
+/** @module Root planning loop — iterative LLM-driven task generation with delta optimization */
+
+import type { Handoff, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
-import type { Tracer, Span } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
-import type { TaskQueue } from "./task-queue.js";
-import type { WorkerPool } from "./worker-pool.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
-import { Subplanner, shouldDecompose, DEFAULT_SUBPLANNER_CONFIG } from "./subplanner.js";
-import { createPlannerPiSession, cleanupPiSession, type PiSessionResult } from "./shared.js";
-import { type RepoState, type RawTaskInput, readRepoState, parsePlannerResponse, parseLLMTaskArray, ConcurrencyLimiter, slugifyForBranch, sleep, MAX_HANDOFF_SUMMARY_CHARS, MAX_FILES_PER_HANDOFF } from "./shared.js";
-import { ScopeTracker } from "./scope-tracker.js";
 import type { SweepResult } from "./reconciler.js";
+import { ScopeTracker } from "./scope-tracker.js";
+import {
+  ConcurrencyLimiter,
+  cleanupPiSession,
+  createPlannerPiSession,
+  MAX_FILES_PER_HANDOFF,
+  MAX_HANDOFF_SUMMARY_CHARS,
+  type PiSessionResult,
+  parseLLMTaskArray,
+  parsePlannerResponse,
+  type RawTaskInput,
+  type RepoState,
+  readRepoState,
+  sleep,
+  slugifyForBranch,
+} from "./shared.js";
+import { DEFAULT_SUBPLANNER_CONFIG, type Subplanner, shouldDecompose } from "./subplanner.js";
+import type { TaskQueue } from "./task-queue.js";
+import type { WorkerPool } from "./worker-pool.js";
 
 const logger = createLogger("planner", "root-planner");
 
@@ -73,7 +87,11 @@ export class Planner {
 
   private taskCreatedCallbacks: ((task: Task) => void)[];
   private taskCompletedCallbacks: ((task: Task, handoff: Handoff) => void)[];
-  private iterationCompleteCallbacks: ((iteration: number, tasks: Task[], handoffs: Handoff[]) => void)[];
+  private iterationCompleteCallbacks: ((
+    iteration: number,
+    tasks: Task[],
+    handoffs: Handoff[],
+  ) => void)[];
   private errorCallbacks: ((error: Error) => void)[];
 
   constructor(
@@ -162,7 +180,13 @@ export class Planner {
     let consecutiveErrors = 0;
 
     while (this.running && iteration < this.plannerConfig.maxIterations) {
-      logger.debug("Loop tick", { iteration, activeTasks: this.activeTasks.size, pendingHandoffs: this.pendingHandoffs.length, handoffsSinceLastPlan: this.handoffsSinceLastPlan.length, planningDone });
+      logger.debug("Loop tick", {
+        iteration,
+        activeTasks: this.activeTasks.size,
+        pendingHandoffs: this.pendingHandoffs.length,
+        handoffsSinceLastPlan: this.handoffsSinceLastPlan.length,
+        planningDone,
+      });
       try {
         this.collectCompletedHandoffs();
 
@@ -187,7 +211,11 @@ export class Planner {
           consecutiveErrors = 0;
           this.handoffsSinceLastPlan = [];
 
-          if (tasks.length === 0 && this.activeTasks.size === 0 && this.taskQueue.getPendingCount() === 0) {
+          if (
+            tasks.length === 0 &&
+            this.activeTasks.size === 0 &&
+            this.taskQueue.getPendingCount() === 0
+          ) {
             logger.info("No more tasks to create and no active work. Planning complete.");
             planningDone = true;
           } else if (tasks.length > 0) {
@@ -209,18 +237,18 @@ export class Planner {
         const err = error instanceof Error ? error : new Error(String(error));
         consecutiveErrors++;
 
-        const backoffMs = Math.min(
-          BACKOFF_BASE_MS * Math.pow(2, consecutiveErrors - 1),
-          BACKOFF_MAX_MS,
-        );
+        const backoffMs = Math.min(BACKOFF_BASE_MS * 2 ** (consecutiveErrors - 1), BACKOFF_MAX_MS);
 
-        logger.error(`Planning failed (attempt ${consecutiveErrors}), retrying in ${(backoffMs / 1000).toFixed(0)}s`, {
-          error: err.message,
-          consecutiveErrors,
-          iteration: iteration + 1,
-          activeTasks: this.activeTasks.size,
-          hasPiSession: this.piSession !== null,
-        });
+        logger.error(
+          `Planning failed (attempt ${consecutiveErrors}), retrying in ${(backoffMs / 1000).toFixed(0)}s`,
+          {
+            error: err.message,
+            consecutiveErrors,
+            iteration: iteration + 1,
+            activeTasks: this.activeTasks.size,
+            hasPiSession: this.piSession !== null,
+          },
+        );
 
         for (const cb of this.errorCallbacks) {
           cb(err);
@@ -245,7 +273,10 @@ export class Planner {
 
     this.disposeSession();
     this.running = false;
-    logger.info("Planner loop finished", { iterations: iteration, totalHandoffs: this.allHandoffs.length });
+    logger.info("Planner loop finished", {
+      iterations: iteration,
+      totalHandoffs: this.allHandoffs.length,
+    });
 
     this.rootSpan?.setStatus("ok");
     this.rootSpan?.end();
@@ -299,7 +330,10 @@ export class Planner {
       this.monitor.recordTokenUsage(tokenDelta);
 
       const responseText = session.getLastAssistantText();
-      logger.debug("LLM response preview", { length: responseText?.length ?? 0, preview: responseText?.slice(0, 500) });
+      logger.debug("LLM response preview", {
+        length: responseText?.length ?? 0,
+        preview: responseText?.slice(0, 500),
+      });
       if (!responseText) {
         logger.warn("Pi session returned no assistant text");
         iterationSpan?.setStatus("error", "no response text");
@@ -321,7 +355,9 @@ export class Planner {
           description: raw.description,
           scope: raw.scope || [],
           acceptance: raw.acceptance || "",
-          branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
+          branch:
+            raw.branch ||
+            `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
           status: "pending" as const,
           createdAt: Date.now(),
           priority: raw.priority || 5,
@@ -329,7 +365,12 @@ export class Planner {
       });
 
       for (const task of allParsedTasks) {
-        logger.debug("Parsed task from LLM", { id: task.id, description: task.description.slice(0, 200), scope: task.scope, priority: task.priority });
+        logger.debug("Parsed task from LLM", {
+          id: task.id,
+          description: task.description.slice(0, 200),
+          scope: task.scope,
+          priority: task.priority,
+        });
       }
 
       const tasks = allParsedTasks.filter((t) => {
@@ -398,10 +439,22 @@ export class Planner {
     msg += `This is the initial planning call. SPEC.md and FEATURES.json above are binding — your tasks must conform to the dependencies, file structure, and features they define. Produce your first batch of tasks and your scratchpad.\n`;
 
     this.previousFileTree = new Set(repoState.fileTree);
-    this.previousFeaturesHash = repoState.featuresJson ? Planner.contentHash(repoState.featuresJson) : 0;
-    this.previousDecisionsHash = repoState.decisionsMd ? Planner.contentHash(repoState.decisionsMd) : 0;
+    this.previousFeaturesHash = repoState.featuresJson
+      ? Planner.contentHash(repoState.featuresJson)
+      : 0;
+    this.previousDecisionsHash = repoState.decisionsMd
+      ? Planner.contentHash(repoState.decisionsMd)
+      : 0;
 
-    logger.debug("Built initial planner prompt", { length: msg.length, hasSpec: !!repoState.specMd, hasFeatures: !!repoState.featuresJson, hasAgents: !!repoState.agentsMd, hasDecisions: !!repoState.decisionsMd, fileTreeSize: repoState.fileTree.length, commitsCount: repoState.recentCommits.length });
+    logger.debug("Built initial planner prompt", {
+      length: msg.length,
+      hasSpec: !!repoState.specMd,
+      hasFeatures: !!repoState.featuresJson,
+      hasAgents: !!repoState.agentsMd,
+      hasDecisions: !!repoState.decisionsMd,
+      fileTreeSize: repoState.fileTree.length,
+      commitsCount: repoState.recentCommits.length,
+    });
     return msg;
   }
 
@@ -409,8 +462,8 @@ export class Planner {
     let msg = `## Updated Repository State\n`;
 
     const currentTree = new Set(repoState.fileTree);
-    const newFiles = repoState.fileTree.filter(f => !this.previousFileTree.has(f));
-    const removedFiles = [...this.previousFileTree].filter(f => !currentTree.has(f));
+    const newFiles = repoState.fileTree.filter((f) => !this.previousFileTree.has(f));
+    const removedFiles = [...this.previousFileTree].filter((f) => !currentTree.has(f));
 
     if (newFiles.length === 0 && removedFiles.length === 0) {
       msg += `File tree: unchanged (${currentTree.size} files). Use read-only tools to explore specific paths.\n\n`;
@@ -447,14 +500,19 @@ export class Planner {
       for (const h of newHandoffs) {
         msg += `### Task ${h.taskId} — ${h.status}\n`;
 
-        const summary = h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
-          ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "…"
-          : h.summary;
+        const summary =
+          h.summary.length > MAX_HANDOFF_SUMMARY_CHARS
+            ? h.summary.slice(0, MAX_HANDOFF_SUMMARY_CHARS) + "…"
+            : h.summary;
         msg += `Summary: ${summary}\n`;
 
-        const files = h.filesChanged.length > MAX_FILES_PER_HANDOFF
-          ? [...h.filesChanged.slice(0, MAX_FILES_PER_HANDOFF), `... (${h.filesChanged.length - MAX_FILES_PER_HANDOFF} more)`]
-          : h.filesChanged;
+        const files =
+          h.filesChanged.length > MAX_FILES_PER_HANDOFF
+            ? [
+                ...h.filesChanged.slice(0, MAX_FILES_PER_HANDOFF),
+                `... (${h.filesChanged.length - MAX_FILES_PER_HANDOFF} more)`,
+              ]
+            : h.filesChanged;
         msg += `Files changed: ${files.join(", ")}\n`;
 
         if (h.concerns.length > 0) msg += `Concerns: ${h.concerns.join("; ")}\n`;
@@ -477,7 +535,9 @@ export class Planner {
     msg += `## Merge Queue Health\n`;
     msg += `Merged: ${mergeStats.totalMerged} | Conflicts: ${mergeStats.totalConflicts} | Failed: ${mergeStats.totalFailed} | Queue depth: ${mergeQueueLen}\n`;
     if (mergeStats.totalMerged + mergeStats.totalConflicts > 0) {
-      const rate = Math.round((mergeStats.totalMerged / (mergeStats.totalMerged + mergeStats.totalConflicts)) * 100);
+      const rate = Math.round(
+        (mergeStats.totalMerged / (mergeStats.totalMerged + mergeStats.totalConflicts)) * 100,
+      );
       msg += `Success rate: ${rate}%\n`;
     }
     msg += `\n`;
@@ -512,7 +572,12 @@ export class Planner {
       msg += ` Build/tests are failing — emit targeted fix tasks.`;
     }
     msg += `\n`;
-    logger.debug("Built follow-up planner prompt", { length: msg.length, newHandoffs: newHandoffs.length, activeTasks: this.activeTasks.size, fileTreeDelta: newFiles.length + removedFiles.length });
+    logger.debug("Built follow-up planner prompt", {
+      length: msg.length,
+      newHandoffs: newHandoffs.length,
+      activeTasks: this.activeTasks.size,
+      fileTreeDelta: newFiles.length + removedFiles.length,
+    });
     return msg;
   }
 
@@ -540,9 +605,16 @@ export class Planner {
 
   /** Fire-and-forget: dispatches task to a worker, pushes result to pendingHandoffs on completion. */
   private dispatchSingleTask(task: Task): void {
-    const dispatchSpan = this.rootSpan?.child("planner.dispatchTask", { taskId: task.id, agentId: "planner" });
+    const dispatchSpan = this.rootSpan?.child("planner.dispatchTask", {
+      taskId: task.id,
+      agentId: "planner",
+    });
     const promise = (async () => {
-      logger.debug("Awaiting dispatch slot", { taskId: task.id, activeSlots: this.dispatchLimiter.getActive(), queuedWaiting: this.dispatchLimiter.getQueueLength() });
+      logger.debug("Awaiting dispatch slot", {
+        taskId: task.id,
+        activeSlots: this.dispatchLimiter.getActive(),
+        queuedWaiting: this.dispatchLimiter.getQueueLength(),
+      });
       await this.dispatchLimiter.acquire();
 
       const current = this.taskQueue.getById(task.id);
@@ -685,7 +757,14 @@ export class Planner {
         }
       }
 
-      logger.debug("Handoff details", { taskId: task.id, status: handoff.status, diffSize: handoff.diff.length, summary: handoff.summary.slice(0, 300), concerns: handoff.concerns, suggestions: handoff.suggestions });
+      logger.debug("Handoff details", {
+        taskId: task.id,
+        status: handoff.status,
+        diffSize: handoff.diff.length,
+        summary: handoff.summary.slice(0, 300),
+        concerns: handoff.concerns,
+        suggestions: handoff.suggestions,
+      });
       logger.info("Collected handoff", {
         taskId: task.id,
         status: handoff.status,
@@ -754,7 +833,9 @@ export class Planner {
     this.taskCompletedCallbacks.push(callback);
   }
 
-  onIterationComplete(callback: (iteration: number, tasks: Task[], handoffs: Handoff[]) => void): void {
+  onIterationComplete(
+    callback: (iteration: number, tasks: Task[], handoffs: Handoff[]) => void,
+  ): void {
     this.iterationCompleteCallbacks.push(callback);
   }
 
@@ -762,4 +843,3 @@ export class Planner {
     this.errorCallbacks.push(callback);
   }
 }
-

@@ -1,3 +1,5 @@
+/** @module Periodic build and test reconciliation with adaptive intervals and LLM-generated fix tasks */
+
 /**
  * Reconciler - Timer-based sweep that keeps the target repo green.
  * Periodically runs tsc + npm test, and creates fix tasks when failures are detected.
@@ -5,14 +7,14 @@
 
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { Task, Tracer, Span } from "@longshot/core";
+import type { Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
-import type { TaskQueue } from "./task-queue.js";
+import { LLMClient, type LLMMessage } from "./llm-client.js";
 import type { MergeQueue, MergeStats } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
-import { LLMClient, type LLMMessage } from "./llm-client.js";
 import { parseLLMTaskArray, slugifyForBranch } from "./shared.js";
+import type { TaskQueue } from "./task-queue.js";
 
 const execFileAsync = promisify(execFile);
 const logger = createLogger("reconciler", "reconciler");
@@ -189,20 +191,45 @@ export class Reconciler {
     logger.debug("Running tsc --noEmit", { targetRepo: this.targetRepoPath });
     const tscResult = await runCommand("npx", ["tsc", "--noEmit"], this.targetRepoPath);
     const buildOutput = tscResult.stdout + tscResult.stderr;
-    const buildNotConfigured = /no inputs were found|could not find a valid tsconfig/i.test(buildOutput);
-    const buildOk = buildNotConfigured || (tscResult.code === 0 && !tscResult.stderr?.includes("error TS"));
-    logger.debug("tsc result", { exitCode: tscResult.code, ok: buildOk, buildNotConfigured, stdoutSize: tscResult.stdout.length, stderrSize: tscResult.stderr.length, outputPreview: buildOutput.slice(0, 500) });
+    const buildNotConfigured = /no inputs were found|could not find a valid tsconfig/i.test(
+      buildOutput,
+    );
+    const buildOk =
+      buildNotConfigured || (tscResult.code === 0 && !tscResult.stderr?.includes("error TS"));
+    logger.debug("tsc result", {
+      exitCode: tscResult.code,
+      ok: buildOk,
+      buildNotConfigured,
+      stdoutSize: tscResult.stdout.length,
+      stderrSize: tscResult.stderr.length,
+      outputPreview: buildOutput.slice(0, 500),
+    });
     buildSpan?.setAttributes({ exitCode: tscResult.code ?? -1, ok: buildOk, buildNotConfigured });
     buildSpan?.end();
 
     const buildRunSpan = sweepSpan?.child("reconciler.buildRun");
     logger.debug("Running npm run build", { targetRepo: this.targetRepoPath });
-    const buildRunResult = await runCommand("npm", ["run", "build", "--if-present"], this.targetRepoPath);
+    const buildRunResult = await runCommand(
+      "npm",
+      ["run", "build", "--if-present"],
+      this.targetRepoPath,
+    );
     const buildRunOutput = buildRunResult.stdout + buildRunResult.stderr;
-    const buildRunNotConfigured = /Missing script|npm error|ERR!/i.test(buildRunOutput) && buildRunResult.code !== 0 && !buildRunOutput.includes("error TS");
+    const buildRunNotConfigured =
+      /Missing script|npm error|ERR!/i.test(buildRunOutput) &&
+      buildRunResult.code !== 0 &&
+      !buildRunOutput.includes("error TS");
     const buildRunOk = buildRunNotConfigured || buildRunResult.code === 0;
-    logger.debug("npm run build result", { exitCode: buildRunResult.code, ok: buildRunOk, buildRunNotConfigured });
-    buildRunSpan?.setAttributes({ exitCode: buildRunResult.code ?? -1, ok: buildRunOk, buildRunNotConfigured });
+    logger.debug("npm run build result", {
+      exitCode: buildRunResult.code,
+      ok: buildRunOk,
+      buildRunNotConfigured,
+    });
+    buildRunSpan?.setAttributes({
+      exitCode: buildRunResult.code ?? -1,
+      ok: buildRunOk,
+      buildRunNotConfigured,
+    });
     buildRunSpan?.end();
 
     const testSpan = sweepSpan?.child("reconciler.test");
@@ -210,23 +237,44 @@ export class Reconciler {
     const testResult = await runCommand("npm", ["test"], this.targetRepoPath);
     const testOutput = testResult.stdout + testResult.stderr;
     const testNotConfigured = /Missing script|no test specified/i.test(testOutput);
-    const testsOk = testNotConfigured || (testResult.code === 0 && !testResult.stderr?.includes("FAIL"));
-    logger.debug("npm test result", { exitCode: testResult.code, ok: testsOk, testNotConfigured, stdoutSize: testResult.stdout.length, stderrSize: testResult.stderr.length, outputPreview: testOutput.slice(0, 500) });
+    const testsOk =
+      testNotConfigured || (testResult.code === 0 && !testResult.stderr?.includes("FAIL"));
+    logger.debug("npm test result", {
+      exitCode: testResult.code,
+      ok: testsOk,
+      testNotConfigured,
+      stdoutSize: testResult.stdout.length,
+      stderrSize: testResult.stderr.length,
+      outputPreview: testOutput.slice(0, 500),
+    });
     testSpan?.setAttributes({ exitCode: testResult.code ?? -1, ok: testsOk, testNotConfigured });
     testSpan?.end();
 
     const conflictResult = await runCommand(
-      "git", ["grep", "-rl", "<<<<<<<", "--", "*.ts", "*.tsx", "*.js", "*.json"],
+      "git",
+      ["grep", "-rl", "<<<<<<<", "--", "*.ts", "*.tsx", "*.js", "*.json"],
       this.targetRepoPath,
     );
     const conflictFiles = conflictResult.stdout.trim().split("\n").filter(Boolean);
     const hasConflictMarkers = conflictFiles.length > 0;
 
-    logger.info("Sweep check results", { buildOk, buildRunOk, testsOk, hasConflictMarkers, conflictFileCount: conflictFiles.length });
+    logger.info("Sweep check results", {
+      buildOk,
+      buildRunOk,
+      testsOk,
+      hasConflictMarkers,
+      conflictFileCount: conflictFiles.length,
+    });
 
     if (buildOk && buildRunOk && testsOk && !hasConflictMarkers) {
       logger.info("All green — no fix tasks needed");
-      sweepSpan?.setAttributes({ buildOk, buildRunOk, testsOk, hasConflictMarkers, fixTasksCreated: 0 });
+      sweepSpan?.setAttributes({
+        buildOk,
+        buildRunOk,
+        testsOk,
+        hasConflictMarkers,
+        fixTasksCreated: 0,
+      });
       sweepSpan?.setStatus("ok");
       sweepSpan?.end();
 
@@ -253,7 +301,14 @@ export class Reconciler {
         mergesBefore: mergeCountBefore,
         mergesAfter: mergeCountAfter,
       });
-      sweepSpan?.setAttributes({ buildOk, buildRunOk, testsOk, hasConflictMarkers, staleSkip: true, fixTasksCreated: 0 });
+      sweepSpan?.setAttributes({
+        buildOk,
+        buildRunOk,
+        testsOk,
+        hasConflictMarkers,
+        staleSkip: true,
+        fixTasksCreated: 0,
+      });
       sweepSpan?.setStatus("ok", "stale skip");
       sweepSpan?.end();
       return {
@@ -304,28 +359,43 @@ export class Reconciler {
     ];
 
     logger.info("Calling LLM for fix task generation", { messageLength: userMessage.length });
-    logger.debug("Reconciler LLM prompt", { systemPromptSize: this.systemPrompt.length, userMessagePreview: userMessage.slice(0, 500) });
+    logger.debug("Reconciler LLM prompt", {
+      systemPromptSize: this.systemPrompt.length,
+      userMessagePreview: userMessage.slice(0, 500),
+    });
 
     let rawTasks: ReturnType<typeof parseLLMTaskArray>;
 
     try {
       const response = await this.llmClient.complete(messages, undefined, sweepSpan);
       this.monitor.recordTokenUsage(response.usage.totalTokens);
-      logger.debug("Reconciler LLM response", { contentLength: response.content.length, preview: response.content.slice(0, 500), tokens: response.usage.totalTokens, endpoint: response.endpoint, latencyMs: response.latencyMs });
+      logger.debug("Reconciler LLM response", {
+        contentLength: response.content.length,
+        preview: response.content.slice(0, 500),
+        tokens: response.usage.totalTokens,
+        endpoint: response.endpoint,
+        latencyMs: response.latencyMs,
+      });
       rawTasks = parseLLMTaskArray(response.content);
     } catch (llmError) {
       const errMsg = llmError instanceof Error ? llmError.message : String(llmError);
-      logger.warn("LLM unreachable for reconciler — skipping fix task generation (will retry next sweep)", {
-        error: errMsg,
+      logger.warn(
+        "LLM unreachable for reconciler — skipping fix task generation (will retry next sweep)",
+        {
+          error: errMsg,
+          buildOk,
+          testsOk,
+          hasConflictMarkers,
+        },
+      );
+      sweepSpan?.setAttributes({
         buildOk,
-        testsOk,
-        hasConflictMarkers,
-      });
-      sweepSpan?.setAttributes({         buildOk,
         buildRunOk,
         testsOk,
         hasConflictMarkers,
-        llmFailed: true, fixTasksCreated: 0 });
+        llmFailed: true,
+        fixTasksCreated: 0,
+      });
       sweepSpan?.setStatus("error", `LLM unreachable: ${errMsg}`);
       sweepSpan?.end();
       return {
@@ -344,7 +414,7 @@ export class Reconciler {
     const tasks: Task[] = [];
     for (const raw of capped) {
       const scope = raw.scope || [];
-      const allScopesCovered = scope.length > 0 && scope.every(f => this.recentFixScopes.has(f));
+      const allScopesCovered = scope.length > 0 && scope.every((f) => this.recentFixScopes.has(f));
       if (allScopesCovered) {
         logger.debug("Skipping duplicate fix task (scope already covered)", { scope });
         continue;
@@ -357,7 +427,8 @@ export class Reconciler {
         description: raw.description,
         scope,
         acceptance: raw.acceptance || "tsc --noEmit returns 0 and npm test returns 0",
-        branch: raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
+        branch:
+          raw.branch || `${this.config.git.branchPrefix}${id}-${slugifyForBranch(raw.description)}`,
         status: "pending" as const,
         createdAt: Date.now(),
         priority: 1,

@@ -10,8 +10,15 @@
       "dependsOn": ["^typecheck"],
       "cache": true
     },
+    "test": {
+      "dependsOn": ["^build"],
+      "cache": false
+    },
     "clean": {
       "cache": false
+    },
+    "lint": {
+      "cache": true
     }
   }
 }

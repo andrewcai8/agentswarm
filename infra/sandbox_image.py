@@ -18,8 +18,9 @@ Usage:
 """
 
 import os
-import modal
 from pathlib import Path
+
+import modal
 
 # Root of the longshot repo
 REPO_ROOT = Path(__file__).parent.parent
@@ -28,14 +29,14 @@ REPO_ROOT = Path(__file__).parent.parent
 def create_agent_image() -> modal.Image:
     """
     Create the Modal Image for coding agent sandboxes.
-    
+
     The image includes:
     - Debian slim base with Python 3.12
     - Node.js 22.x LTS via NodeSource
     - Git, curl, wget, ripgrep, jq, tree, build-essential
     - pnpm package manager
     - The compiled @longshot/sandbox package
-    
+
     Returns:
         modal.Image: Ready-to-use image for Sandbox.create()
     """
@@ -71,21 +72,23 @@ def create_agent_image() -> modal.Image:
             "pnpm --version",
         )
         # Git configuration for agent commits
-.run_commands(
+        .run_commands(
             f'git config --global user.name "{os.environ.get("GIT_COMMIT_NAME", "Longshot Bot")}"',
             f'git config --global user.email "{os.environ.get("GIT_COMMIT_EMAIL", "agent@longshot.bot")}"',
-            'git config --global init.defaultBranch main',
+            "git config --global init.defaultBranch main",
         )
         # Set working directory
         .workdir("/workspace")
         # Environment variables
-        .env({
-            "NODE_ENV": "production",
-            "PNPM_HOME": "/root/.local/share/pnpm",
-            "PATH": "/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
-        })
+        .env(
+            {
+                "NODE_ENV": "production",
+                "PNPM_HOME": "/root/.local/share/pnpm",
+                "PATH": "/root/.local/share/pnpm:/usr/local/bin:/usr/bin:/bin",
+            }
+        )
     )
-    
+
     return image
 
 
@@ -93,17 +96,17 @@ def create_worker_image() -> modal.Image:
     """
     Extended image that includes the pre-built @longshot/sandbox package
     and the Pi coding agent SDK.
-    
+
     Call this after packages/sandbox has been built locally.
     Copies the compiled sandbox agent code into the image.
     """
     base = create_agent_image()
-    
+
     sandbox_dist = REPO_ROOT / "packages" / "sandbox" / "dist"
     sandbox_pkg = REPO_ROOT / "packages" / "sandbox" / "package.json"
     core_dist = REPO_ROOT / "packages" / "core" / "dist"
     core_pkg = REPO_ROOT / "packages" / "core" / "package.json"
-    
+
     image = (
         base
         # Copy core package
@@ -116,7 +119,7 @@ def create_worker_image() -> modal.Image:
         .run_commands("npm install -g @mariozechner/pi-coding-agent@0.52.12")
         # Link @longshot/core so sandbox can resolve it
         # (both packages are pre-built JS with zero runtime deps — no npm install needed)
-.run_commands(
+        .run_commands(
             "mkdir -p /agent/node_modules/@longshot",
             "ln -s /agent/packages/core /agent/node_modules/@longshot/core",
             # Link Pi SDK so worker-runner.js can resolve it
@@ -124,7 +127,7 @@ def create_worker_image() -> modal.Image:
             "ln -s /agent/packages/sandbox/dist/worker-runner.js /agent/worker-runner.js",
         )
     )
-    
+
     return image
 
 
@@ -137,7 +140,7 @@ app = modal.App("sandbox-image-test")
 def test_image():
     """Verify the image has all required tools."""
     import subprocess
-    
+
     checks = [
         ("node", ["node", "--version"]),
         ("npm", ["npm", "--version"]),
@@ -148,7 +151,7 @@ def test_image():
         ("python3", ["python3", "--version"]),
         ("curl", ["curl", "--version"]),
     ]
-    
+
     results = {}
     for name, cmd in checks:
         try:
@@ -157,7 +160,7 @@ def test_image():
             results[name] = {"status": "ok", "version": version}
         except Exception as e:
             results[name] = {"status": "error", "error": str(e)}
-    
+
     return results
 
 

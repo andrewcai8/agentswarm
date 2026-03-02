@@ -1,6 +1,16 @@
-import { config as loadDotenv } from "dotenv";
+/** @module CLI entry point for the orchestrator — parses args and streams NDJSON to stdout */
+
 import { resolve } from "node:path";
-import { createLogger, enableFileLogging, closeFileLogging, enableTracing, closeTracing, setLogLevel, getLogLevel } from "@longshot/core";
+import {
+  closeFileLogging,
+  closeTracing,
+  createLogger,
+  enableFileLogging,
+  enableTracing,
+  getLogLevel,
+  setLogLevel,
+} from "@longshot/core";
+import { config as loadDotenv } from "dotenv";
 import { createOrchestrator } from "./orchestrator.js";
 
 loadDotenv({ path: resolve(process.cwd(), ".env") });
@@ -205,7 +215,8 @@ async function main(): Promise<void> {
   logger.info("Orchestrator started — beginning planner loop");
 
   const request =
-    process.argv[2] || "Build Minecraft according to SPEC.md and FEATURES.json in the target repository.";
+    process.argv[2] ||
+    "Build Minecraft according to SPEC.md and FEATURES.json in the target repository.";
   const finalSnapshot = await orchestrator.run(request);
 
   finalize(finalSnapshot);

@@ -179,7 +179,7 @@ jobs:
     name: Publish Homebrew formula to tap
     runs-on: ubuntu-latest
     needs: [update-homebrew-formula]
-    if: github.ref_type == 'tag' && vars.ENABLE_PUBLIC_RELEASE == 'true' && vars.HOMEBREW_TAP_REPO != '' && secrets.HOMEBREW_TAP_TOKEN != ''
+    if: github.ref_type == 'tag' && vars.ENABLE_PUBLIC_RELEASE == 'true' && vars.HOMEBREW_TAP_REPO != ''
     permissions:
       contents: read
 

@@ -30,3 +30,5 @@ gource/terminal-logs/
 gource/video/
 marketing/
 demo/
+build/
+*.egg-info/

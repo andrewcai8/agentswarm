@@ -202,13 +202,13 @@ jobs:
           cp "formula/longshot.rb" "${TAP_DIR}/Formula/longshot.rb"
 
           cd "${TAP_DIR}"
-          if git diff --quiet -- Formula/longshot.rb; then
+          git add Formula/longshot.rb
+          if git diff --cached --quiet -- Formula/longshot.rb; then
             echo "No Homebrew formula changes detected"
             exit 0
           fi
 
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Formula/longshot.rb
           git commit -m "chore: update longshot formula for ${GITHUB_REF_NAME}"
           git push origin HEAD

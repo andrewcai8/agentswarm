@@ -711,7 +711,6 @@ def render_grid(s: dict[str, Any]) -> Panel:
     root_id = tree_data["root"]
     visible_levels = s["visible_levels"]
     max_visible_depth = max(0, visible_levels - 1)
-    max_visible_depth = max(0, visible_levels - 1)
 
     def meter(progress: float, status: str) -> str:
         if status in ("failed", "cancelled"):

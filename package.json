@@ -14,8 +14,9 @@
     "stagehand:record": "node scripts/stagehand-record.mjs",
     "stagehand:record:hook": "node scripts/stagehand-record.mjs --trigger=post-merge",
     "stagehand:hooks:install": "bash scripts/install-stagehand-hooks.sh",
-    "test": "turbo test",
-    "lint:python": "ruff check .",
+    "test": "turbo test && pnpm test:python",
+    "test:python": "python3 -m unittest discover -s tests",
+    "lint:python": "python3 -m ruff check .",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -38,8 +39,8 @@
       "biome check --write --no-errors-on-unmatched"
     ],
     "*.py": [
-      "ruff check --fix",
-      "ruff format"
+      "python3 -m ruff check --fix",
+      "python3 -m ruff format"
     ]
   }
 }

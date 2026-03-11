@@ -19,6 +19,8 @@ Usage:
     print(result)  # Handoff dict
 """
 
+import argparse
+import base64
 import json
 import os
 import sys
@@ -36,11 +38,34 @@ from infra.sandbox_image import create_worker_image
 # ---------------------------------------------------------------------------
 app = modal.App.lookup("longshot", create_if_missing=True)
 image = create_worker_image()
+RESULT_PREFIX = "__LONGSHOT_RESULT__ "
 
 
 # ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
+def _build_redaction_secrets(git_token: str) -> list[str]:
+    if not git_token:
+        return []
+
+    basic_auth = base64.b64encode(f"x-access-token:{git_token}".encode()).decode("ascii")
+    return [
+        git_token,
+        basic_auth,
+        f"AUTHORIZATION: basic {basic_auth}",
+        f"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic_auth}",
+    ]
+
+
+def _redact_secrets(text: str, secrets: list[str]) -> str:
+    redacted = text
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if not secret:
+            continue
+        redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
+
+
 def run_task(payload: dict) -> dict:
     """
     Run a single coding task in an ephemeral Modal sandbox.
@@ -57,6 +82,8 @@ def run_task(payload: dict) -> dict:
     """
     task = payload["task"]
     task_id = task["id"]
+    git_token = payload.get("gitToken", "")
+    redaction_secrets = _build_redaction_secrets(git_token)
     sb = None
 
     try:
@@ -73,24 +100,37 @@ def run_task(payload: dict) -> dict:
         f.write(json.dumps(payload))
         f.close()
 
-        # Build clone URL with token for push access
+        # Build git auth header for private GitHub clones/pushes without
+        # embedding secrets in the URL (which can leak into logs/errors).
         repo_url = payload["repoUrl"]
-        git_token = payload.get("gitToken", "")
+        github_extraheader = None
         if git_token and "github.com" in repo_url:
-            # Embed token: https://x-access-token:TOKEN@github.com/org/repo.git
-            authed_url = repo_url.replace(
-                "https://github.com",
-                f"https://x-access-token:{git_token}@github.com",
-            )
+            basic_auth = base64.b64encode(f"x-access-token:{git_token}".encode()).decode("ascii")
+            github_extraheader = f"AUTHORIZATION: basic {basic_auth}"
+            redaction_secrets.append(github_extraheader)
         else:
-            authed_url = repo_url
+            github_extraheader = None
 
         # Full clone (no --depth 1) so git diff against startSha works in worker-runner
         t1 = time.time()
-        clone = sb.exec(
-            "git", "clone", authed_url, "/workspace/repo",
-            timeout=120,
-        )
+        if github_extraheader:
+            clone = sb.exec(
+                "git",
+                "-c",
+                f"http.https://github.com/.extraheader={github_extraheader}",
+                "clone",
+                repo_url,
+                "/workspace/repo",
+                timeout=120,
+            )
+        else:
+            clone = sb.exec(
+                "git",
+                "clone",
+                repo_url,
+                "/workspace/repo",
+                timeout=120,
+            )
         clone.wait()
         print(f"[spawn] repo cloned for task {task_id} ({time.time() - t1:.1f}s)", flush=True)
 
@@ -100,31 +140,67 @@ def run_task(payload: dict) -> dict:
         if conflict_source:
             # Conflict-resolution mode: checkout the original branch and
             # rebase onto main so conflict markers appear in the working tree.
-            fetch_branch = sb.exec(
-                "git", "-C", "/workspace/repo", "fetch", "origin", conflict_source,
-                timeout=60,
-            )
+            if github_extraheader:
+                fetch_branch = sb.exec(
+                    "git",
+                    "-c",
+                    f"http.https://github.com/.extraheader={github_extraheader}",
+                    "-C",
+                    "/workspace/repo",
+                    "fetch",
+                    "origin",
+                    conflict_source,
+                    timeout=60,
+                )
+            else:
+                fetch_branch = sb.exec(
+                    "git",
+                    "-C",
+                    "/workspace/repo",
+                    "fetch",
+                    "origin",
+                    conflict_source,
+                    timeout=60,
+                )
             fetch_branch.wait()
             checkout_proc = sb.exec(
-                "git", "-C", "/workspace/repo", "checkout", "-b", branch,
+                "git",
+                "-C",
+                "/workspace/repo",
+                "checkout",
+                "-b",
+                branch,
                 f"origin/{conflict_source}",
             )
             checkout_proc.wait()
             rebase_proc = sb.exec(
-                "git", "-C", "/workspace/repo", "rebase", "origin/main",
+                "git",
+                "-C",
+                "/workspace/repo",
+                "rebase",
+                "origin/main",
             )
             # Rebase will exit non-zero if conflicts exist — that's expected.
             try:
                 rebase_proc.wait()
-            except Exception:
-                pass
+            except Exception as rebase_error:
+                print(
+                    f"[spawn] rebase ended with conflicts for {task_id}: "
+                    f"{_redact_secrets(str(rebase_error), redaction_secrets)}",
+                    flush=True,
+                )
             print(
                 f"[spawn] conflict-resolution mode: rebased {conflict_source} onto main for {task_id}",
                 flush=True,
             )
         else:
             branch_proc = sb.exec(
-                "git", "-C", "/workspace/repo", "checkout", "-b", branch,
+                "git",
+                "-C",
+                "/workspace/repo",
+                "checkout",
+                "-b",
+                branch,
             )
             branch_proc.wait()
             print(f"[spawn] branch created for task {task_id}: {branch}", flush=True)
@@ -156,10 +232,28 @@ def run_task(payload: dict) -> dict:
 
         has_changes = result.get("filesChanged") and len(result["filesChanged"]) > 0
         if git_token and has_changes:
-            push_proc = sb.exec(
-                "git", "-C", "/workspace/repo", "push", "origin", branch,
-                timeout=120,
-            )
+            if github_extraheader:
+                push_proc = sb.exec(
+                    "git",
+                    "-c",
+                    f"http.https://github.com/.extraheader={github_extraheader}",
+                    "-C",
+                    "/workspace/repo",
+                    "push",
+                    "origin",
+                    branch,
+                    timeout=120,
+                )
+            else:
+                push_proc = sb.exec(
+                    "git",
+                    "-C",
+                    "/workspace/repo",
+                    "push",
+                    "origin",
+                    branch,
+                    timeout=120,
+                )
             push_proc.wait()
             print(f"[spawn] pushed branch {branch} to origin", flush=True)
         elif not has_changes:
@@ -171,14 +265,15 @@ def run_task(payload: dict) -> dict:
         return result
 
     except Exception as e:
-        print(f"[spawn] task {task_id} failed: {e}", flush=True)
+        safe_error = _redact_secrets(str(e), redaction_secrets)
+        print(f"[spawn] task {task_id} failed: {safe_error}", flush=True)
         return {
             "taskId": task_id,
             "status": "failed",
-            "summary": str(e),
+            "summary": safe_error,
             "diff": "",
             "filesChanged": [],
-            "concerns": [str(e)],
+            "concerns": [safe_error],
             "suggestions": ["Retry the task"],
             "metrics": {
                 "linesAdded": 0,
@@ -196,14 +291,40 @@ def run_task(payload: dict) -> dict:
             try:
                 sb.terminate()
                 print(f"[spawn] sandbox terminated for task {task_id}", flush=True)
-            except Exception:
-                pass
+            except Exception as terminate_error:
+                print(
+                    f"[spawn] WARNING: failed to terminate sandbox for {task_id}: "
+                    f"{_redact_secrets(str(terminate_error), redaction_secrets)}",
+                    flush=True,
+                )
 
 
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    payload = json.loads(sys.argv[1])
+    parser = argparse.ArgumentParser(description="Spawn a Modal sandbox and run one task")
+    parser.add_argument(
+        "payload_json",
+        nargs="?",
+        help="Task payload as JSON (legacy mode; prefer --stdin)",
+    )
+    parser.add_argument(
+        "--stdin",
+        action="store_true",
+        help="Read JSON payload from stdin",
+    )
+    args = parser.parse_args()
+
+    raw_payload = ""
+    if args.stdin:
+        raw_payload = sys.stdin.read()
+    elif args.payload_json:
+        raw_payload = args.payload_json
+
+    if not raw_payload.strip():
+        raise SystemExit("Missing payload JSON. Use --stdin or pass payload_json argument.")
+
+    payload = json.loads(raw_payload)
     result = run_task(payload)
-    print(json.dumps(result))
+    print(f"{RESULT_PREFIX}{json.dumps(result)}")

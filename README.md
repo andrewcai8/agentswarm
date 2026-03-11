@@ -204,6 +204,8 @@ Each `weight` must be a positive number. `LLM_MODEL`, `LLM_MAX_TOKENS`, and `LLM
 |----------|---------|-------------|
 | `HEALTH_CHECK_INTERVAL` | `10` | Reconciler health check interval in seconds |
 | `MERGE_STRATEGY` | `rebase` | Merge strategy: `fast-forward`, `rebase`, or `merge-commit` |
+| `TASKSTORE_STATE_DIR` | `./taskstore-state` | Directory for durable planner task-state journal and snapshots |
+| `ORCHESTRATOR_RUN_ID` | `run-<timestamp>` | Optional run namespace for TaskStore records (set to resume/debug a specific run) |
 | `FINALIZATION_ENABLED` | `true` | Run build/test sweep after all tasks complete |
 | `FINALIZATION_MAX_ATTEMPTS` | `3` | Max reconciler fix attempts during finalization |
 

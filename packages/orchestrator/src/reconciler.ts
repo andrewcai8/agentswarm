@@ -6,6 +6,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import { promisify } from "node:util";
 import type { Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
@@ -566,20 +567,60 @@ export class Reconciler {
 
     const statusResult = await this.runCommand(
       "git",
-      ["status", "--porcelain"],
+      ["status", "--porcelain=v1", "-z", "--untracked-files=all"],
       this.targetRepoPath,
     );
     if (statusResult.code !== 0) {
       return null;
     }
 
+    const diffResult = await this.runCommand(
+      "git",
+      ["diff", "--no-ext-diff", "--binary", "HEAD", "--"],
+      this.targetRepoPath,
+    );
+    if (diffResult.code !== 0) {
+      return null;
+    }
+
+    const untrackedResult = await this.runCommand(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+      this.targetRepoPath,
+    );
+    if (untrackedResult.code !== 0) {
+      return null;
+    }
+
     const head = headResult.stdout.trim();
-    const dirty = statusResult.stdout.trim().length > 0 ? "dirty" : "clean";
     if (!head) {
       return null;
     }
 
-    return `${head}:${dirty}`;
+    const untrackedPaths = untrackedResult.stdout.split("\0").filter(Boolean).sort();
+    const untrackedFingerprints: string[] = [];
+    for (const filePath of untrackedPaths) {
+      const fileHashResult = await this.runCommand(
+        "git",
+        ["hash-object", "--", filePath],
+        this.targetRepoPath,
+      );
+      if (fileHashResult.code !== 0) {
+        return null;
+      }
+      untrackedFingerprints.push(`${filePath}:${fileHashResult.stdout.trim()}`);
+    }
+
+    const hasher = createHash("sha256");
+    hasher.update(head);
+    hasher.update("\0");
+    hasher.update(statusResult.stdout);
+    hasher.update("\0");
+    hasher.update(diffResult.stdout);
+    hasher.update("\0");
+    hasher.update(untrackedFingerprints.join("\0"));
+
+    return `${head}:${hasher.digest("hex")}`;
   }
 
   /**

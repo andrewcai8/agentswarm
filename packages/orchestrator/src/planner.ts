@@ -658,6 +658,15 @@ export class Planner {
           taskId: task.id,
           status: current.status,
         });
+        if (this.taskStore.isActive(task.id)) {
+          const terminalStatus =
+            current.status === "complete"
+              ? "complete"
+              : current.status === "failed"
+                ? "failed"
+                : "cancelled";
+          this.taskStore.markStatus(task.id, terminalStatus, task.retryCount ?? 0);
+        }
         this.dispatchLimiter.release();
         dispatchSpan?.end();
         return;

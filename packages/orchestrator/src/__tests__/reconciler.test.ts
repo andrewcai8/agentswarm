@@ -235,4 +235,75 @@ describe("Reconciler", () => {
     assert.strictEqual(testCalls, 1);
     assert.strictEqual(llmCalled, false);
   });
+
+  it("does not skip sweep when dirty content changes at same HEAD", async () => {
+    let tscCalls = 0;
+    let buildCalls = 0;
+    let testCalls = 0;
+    let diffVersion = 0;
+
+    const runCommand: ReconcilerDeps["runCommand"] = async (cmd, args) => {
+      if (cmd === "git" && args[0] === "rev-parse") {
+        return { stdout: "abc123\n", stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "status") {
+        return { stdout: " M src/a.ts\0", stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "diff") {
+        diffVersion += 1;
+        return { stdout: `diff-version-${diffVersion}`, stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "ls-files") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "grep") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "git" && args[0] === "log") {
+        return { stdout: "abc123 commit", stderr: "", code: 0 };
+      }
+      if (cmd === "npx") {
+        tscCalls++;
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "npm" && args[0] === "run") {
+        buildCalls++;
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "npm" && args[0] === "test") {
+        testCalls++;
+        return { stdout: "", stderr: "", code: 0 };
+      }
+
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const monitor = { recordTokenUsage: () => {} };
+    const mergeQueue = { getMergeStats: () => ({ totalMerged: 0 }) };
+    const reconciler = new Reconciler(
+      baseConfig(),
+      { intervalMs: 1_000, maxFixTasks: 5 },
+      {} as TaskQueue,
+      mergeQueue as never,
+      monitor as never,
+      "system prompt",
+      {
+        runCommand,
+        completeLLM: async () => ({
+          content: "[]",
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: "stop",
+          endpoint: "primary",
+          latencyMs: 1,
+        }),
+      },
+    );
+
+    await reconciler.sweep();
+    await reconciler.sweep();
+
+    assert.strictEqual(tscCalls, 2);
+    assert.strictEqual(buildCalls, 2);
+    assert.strictEqual(testCalls, 2);
+  });
 });

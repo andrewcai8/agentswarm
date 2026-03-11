@@ -16,7 +16,7 @@
     "stagehand:hooks:install": "bash scripts/install-stagehand-hooks.sh",
     "test": "turbo test && pnpm test:python",
     "test:python": "python3 -m unittest discover -s tests",
-    "lint:python": "uv run ruff check .",
+    "lint:python": "python3 -m ruff check .",
     "prepare": "husky"
   },
   "devDependencies": {
@@ -39,8 +39,8 @@
       "biome check --write --no-errors-on-unmatched"
     ],
     "*.py": [
-      "uv run ruff check --fix",
-      "uv run ruff format"
+      "python3 -m ruff check --fix",
+      "python3 -m ruff format"
     ]
   }
 }

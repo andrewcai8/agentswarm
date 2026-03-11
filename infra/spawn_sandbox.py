@@ -44,10 +44,26 @@ RESULT_PREFIX = "__LONGSHOT_RESULT__ "
 # ---------------------------------------------------------------------------
 # Core function
 # ---------------------------------------------------------------------------
-def _redact_secret(text: str, secret: str) -> str:
-    if not secret:
-        return text
-    return text.replace(secret, "[REDACTED]")
+def _build_redaction_secrets(git_token: str) -> list[str]:
+    if not git_token:
+        return []
+
+    basic_auth = base64.b64encode(f"x-access-token:{git_token}".encode()).decode("ascii")
+    return [
+        git_token,
+        basic_auth,
+        f"AUTHORIZATION: basic {basic_auth}",
+        f"http.https://github.com/.extraheader=AUTHORIZATION: basic {basic_auth}",
+    ]
+
+
+def _redact_secrets(text: str, secrets: list[str]) -> str:
+    redacted = text
+    for secret in sorted(set(secrets), key=len, reverse=True):
+        if not secret:
+            continue
+        redacted = redacted.replace(secret, "[REDACTED]")
+    return redacted
 
 
 def run_task(payload: dict) -> dict:
@@ -67,6 +83,7 @@ def run_task(payload: dict) -> dict:
     task = payload["task"]
     task_id = task["id"]
     git_token = payload.get("gitToken", "")
+    redaction_secrets = _build_redaction_secrets(git_token)
     sb = None
 
     try:
@@ -90,6 +107,7 @@ def run_task(payload: dict) -> dict:
         if git_token and "github.com" in repo_url:
             basic_auth = base64.b64encode(f"x-access-token:{git_token}".encode()).decode("ascii")
             github_extraheader = f"AUTHORIZATION: basic {basic_auth}"
+            redaction_secrets.append(github_extraheader)
         else:
             github_extraheader = None
 
@@ -114,17 +132,6 @@ def run_task(payload: dict) -> dict:
                 timeout=120,
             )
         clone.wait()
-        if github_extraheader:
-            persist_auth = sb.exec(
-                "git",
-                "-C",
-                "/workspace/repo",
-                "config",
-                "http.https://github.com/.extraheader",
-                github_extraheader,
-                timeout=30,
-            )
-            persist_auth.wait()
         print(f"[spawn] repo cloned for task {task_id} ({time.time() - t1:.1f}s)", flush=True)
 
         branch = task["branch"]
@@ -133,15 +140,28 @@ def run_task(payload: dict) -> dict:
         if conflict_source:
             # Conflict-resolution mode: checkout the original branch and
             # rebase onto main so conflict markers appear in the working tree.
-            fetch_branch = sb.exec(
-                "git",
-                "-C",
-                "/workspace/repo",
-                "fetch",
-                "origin",
-                conflict_source,
-                timeout=60,
-            )
+            if github_extraheader:
+                fetch_branch = sb.exec(
+                    "git",
+                    "-c",
+                    f"http.https://github.com/.extraheader={github_extraheader}",
+                    "-C",
+                    "/workspace/repo",
+                    "fetch",
+                    "origin",
+                    conflict_source,
+                    timeout=60,
+                )
+            else:
+                fetch_branch = sb.exec(
+                    "git",
+                    "-C",
+                    "/workspace/repo",
+                    "fetch",
+                    "origin",
+                    conflict_source,
+                    timeout=60,
+                )
             fetch_branch.wait()
             checkout_proc = sb.exec(
                 "git",
@@ -166,7 +186,7 @@ def run_task(payload: dict) -> dict:
             except Exception as rebase_error:
                 print(
                     f"[spawn] rebase ended with conflicts for {task_id}: "
-                    f"{_redact_secret(str(rebase_error), git_token)}",
+                    f"{_redact_secrets(str(rebase_error), redaction_secrets)}",
                     flush=True,
                 )
             print(
@@ -212,15 +232,28 @@ def run_task(payload: dict) -> dict:
 
         has_changes = result.get("filesChanged") and len(result["filesChanged"]) > 0
         if git_token and has_changes:
-            push_proc = sb.exec(
-                "git",
-                "-C",
-                "/workspace/repo",
-                "push",
-                "origin",
-                branch,
-                timeout=120,
-            )
+            if github_extraheader:
+                push_proc = sb.exec(
+                    "git",
+                    "-c",
+                    f"http.https://github.com/.extraheader={github_extraheader}",
+                    "-C",
+                    "/workspace/repo",
+                    "push",
+                    "origin",
+                    branch,
+                    timeout=120,
+                )
+            else:
+                push_proc = sb.exec(
+                    "git",
+                    "-C",
+                    "/workspace/repo",
+                    "push",
+                    "origin",
+                    branch,
+                    timeout=120,
+                )
             push_proc.wait()
             print(f"[spawn] pushed branch {branch} to origin", flush=True)
         elif not has_changes:
@@ -232,7 +265,7 @@ def run_task(payload: dict) -> dict:
         return result
 
     except Exception as e:
-        safe_error = _redact_secret(str(e), git_token)
+        safe_error = _redact_secrets(str(e), redaction_secrets)
         print(f"[spawn] task {task_id} failed: {safe_error}", flush=True)
         return {
             "taskId": task_id,
@@ -261,7 +294,7 @@ def run_task(payload: dict) -> dict:
             except Exception as terminate_error:
                 print(
                     f"[spawn] WARNING: failed to terminate sandbox for {task_id}: "
-                    f"{_redact_secret(str(terminate_error), git_token)}",
+                    f"{_redact_secrets(str(terminate_error), redaction_secrets)}",
                     flush=True,
                 )
 

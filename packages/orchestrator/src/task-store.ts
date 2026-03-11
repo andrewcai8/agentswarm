@@ -13,6 +13,11 @@ const logger = createLogger("task-store", "root-planner");
 const SNAPSHOT_VERSION = 1;
 const DEFAULT_SNAPSHOT_EVERY_EVENTS = 100;
 
+function sanitizeRunIdForPath(runId: string): string {
+  const sanitized = runId.replace(/[^a-zA-Z0-9._-]+/g, "-").replace(/^-+|-+$/g, "");
+  return sanitized.length > 0 ? sanitized : "run";
+}
+
 export type StoredTaskStatus = "active" | "complete" | "failed" | "cancelled";
 
 export interface StoredTaskRecord {
@@ -216,17 +221,18 @@ export class JournalTaskStore implements TaskStore {
   constructor(options: JournalTaskStoreOptions) {
     this.now = options.now ?? (() => Date.now());
     this.runId = options.runId;
+    const runScopedStateDir = join(options.stateDir, sanitizeRunIdForPath(options.runId));
     this.snapshotPath = join(
-      options.stateDir,
+      runScopedStateDir,
       options.snapshotFileName ?? "task-store.snapshot.json",
     );
     this.journalPath = join(
-      options.stateDir,
+      runScopedStateDir,
       options.journalFileName ?? "task-store.journal.ndjson",
     );
     this.snapshotEveryEvents = options.snapshotEveryEvents ?? DEFAULT_SNAPSHOT_EVERY_EVENTS;
 
-    mkdirSync(options.stateDir, { recursive: true });
+    mkdirSync(runScopedStateDir, { recursive: true });
     this.loadSnapshot();
     this.replayJournal();
   }

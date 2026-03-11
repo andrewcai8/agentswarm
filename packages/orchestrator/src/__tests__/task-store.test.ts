@@ -59,6 +59,49 @@ describe("TaskStore", () => {
     }
   });
 
+  it("JournalTaskStore keeps different run snapshots isolated under same stateDir", () => {
+    const stateDir = mkdtempSync(join(tmpdir(), "longshot-taskstore-"));
+    try {
+      const now = (() => {
+        let t = 3_000;
+        return () => {
+          t += 1;
+          return t;
+        };
+      })();
+
+      const storeA = new JournalTaskStore({
+        stateDir,
+        runId: "run:a",
+        now,
+        snapshotEveryEvents: 1,
+      });
+      const storeB = new JournalTaskStore({
+        stateDir,
+        runId: "run:b",
+        now,
+        snapshotEveryEvents: 1,
+      });
+
+      storeA.markActive("task-a", "worker/task-a", 0);
+      storeB.markActive("task-b", "worker/task-b", 0);
+      storeA.markStatus("task-a", "complete", 0);
+      storeB.markStatus("task-b", "complete", 0);
+
+      const reloadA = new JournalTaskStore({ stateDir, runId: "run:a", now });
+      const reloadB = new JournalTaskStore({ stateDir, runId: "run:b", now });
+
+      assert.equal(reloadA.hasTask("task-a"), true);
+      assert.equal(reloadA.hasTask("task-b"), false);
+      assert.equal(reloadB.hasTask("task-b"), true);
+      assert.equal(reloadB.hasTask("task-a"), false);
+      assert.equal(reloadA.getTaskCount(), 1);
+      assert.equal(reloadB.getTaskCount(), 1);
+    } finally {
+      rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
+
   it("reapStaleActive marks only expired active records as failed", () => {
     const now = (() => {
       let t = 1_000;

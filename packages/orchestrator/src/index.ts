@@ -2,6 +2,7 @@
 
 export * from "./config.js";
 export * from "./llm-client.js";
+export * from "./llm-routing.js";
 export * from "./merge-queue.js";
 export * from "./monitor.js";
 export * from "./orchestrator.js";

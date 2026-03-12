@@ -398,6 +398,7 @@ export interface PiSessionOptions {
   systemPrompt: string;
   targetRepoPath: string;
   llmConfig: LLMConfig;
+  llmEndpoint?: LLMConfig["endpoints"][number];
 }
 
 export interface PiSessionResult {
@@ -405,12 +406,13 @@ export interface PiSessionResult {
   tempDir: string;
 }
 
-function registerPiModel(llmConfig: LLMConfig) {
+function registerPiModel(llmConfig: LLMConfig, endpointOverride?: LLMConfig["endpoints"][number]) {
   const authStorage = Reflect.construct(AuthStorage, []) as AuthStorage;
   const modelRegistry = new ModelRegistry(authStorage);
 
-  // Pi doesn't support multi-endpoint; take the first one.
-  const endpoint = llmConfig.endpoints[0];
+  // Pi doesn't support multi-endpoint failover within a single session, so we
+  // bind each session to one selected endpoint up front.
+  const endpoint = endpointOverride ?? llmConfig.endpoints[0];
   if (!endpoint) {
     throw new Error("No LLM endpoints configured for Pi session");
   }
@@ -445,20 +447,21 @@ function registerPiModel(llmConfig: LLMConfig) {
 }
 
 export async function createPlannerPiSession(options: PiSessionOptions): Promise<PiSessionResult> {
-  const { systemPrompt, targetRepoPath, llmConfig } = options;
+  const { systemPrompt, targetRepoPath, llmConfig, llmEndpoint } = options;
 
   const tempDir = mkdtempSync(join(tmpdir(), "longshot-planner-"));
+  const selectedEndpoint = llmEndpoint ?? llmConfig.endpoints[0];
   logger.debug("Creating Pi session", {
     tempDir,
     modelName: llmConfig.model,
-    endpoint: llmConfig.endpoints[0]?.name,
+    endpoint: selectedEndpoint?.name,
     maxTokens: llmConfig.maxTokens,
     temperature: llmConfig.temperature,
     targetRepoPath,
   });
   writeFileSync(join(tempDir, "AGENTS.md"), systemPrompt, "utf-8");
 
-  const { model, authStorage, modelRegistry } = registerPiModel(llmConfig);
+  const { model, authStorage, modelRegistry } = registerPiModel(llmConfig, selectedEndpoint);
 
   const { session } = await createAgentSession({
     cwd: tempDir,

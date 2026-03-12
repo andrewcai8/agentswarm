@@ -3,6 +3,7 @@
 import type { Handoff, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
+import { WeightedRoundRobinSelector } from "./llm-routing.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import type { SweepResult } from "./reconciler.js";
@@ -42,6 +43,8 @@ const MAX_CONSECUTIVE_ERRORS = 10;
 
 const MAX_TASK_RETRIES = 1;
 
+type PlannerEndpoint = OrchestratorConfig["llm"]["endpoints"][number];
+
 export interface PlannerConfig {
   maxIterations: number;
 }
@@ -73,6 +76,7 @@ export class Planner {
   private targetRepoPath: string;
   private subplanner: Subplanner | null;
   private deps: PlannerDeps;
+  private plannerEndpointSelector: WeightedRoundRobinSelector<PlannerEndpoint> | null;
 
   private running: boolean;
   private taskCounter: number;
@@ -124,6 +128,8 @@ export class Planner {
     this.systemPrompt = systemPrompt;
     this.targetRepoPath = config.targetRepoPath;
     this.subplanner = subplanner ?? null;
+    this.plannerEndpointSelector =
+      config.llm.endpoints.length > 0 ? new WeightedRoundRobinSelector(config.llm.endpoints) : null;
 
     this.deps = {
       createPlannerPiSession,
@@ -161,6 +167,10 @@ export class Planner {
     this.tracer = tracer;
   }
 
+  private selectPiEndpoint(): PlannerEndpoint | undefined {
+    return this.plannerEndpointSelector?.next();
+  }
+
   private async initSession(): Promise<void> {
     if (this.piSession) return;
 
@@ -169,6 +179,7 @@ export class Planner {
       systemPrompt: this.systemPrompt,
       targetRepoPath: this.targetRepoPath,
       llmConfig: this.config.llm,
+      llmEndpoint: this.selectPiEndpoint(),
     });
     this.lastTotalTokens = 0;
     logger.info("Pi agent session ready");

@@ -18,7 +18,7 @@ import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
 import type { Handoff, HarnessConfig, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
-import { WeightedRoundRobinSelector } from "./shared.js";
+import { WeightedRoundRobinSelector } from "./llm-routing.js";
 
 const logger = createLogger("worker-pool", "root-planner");
 

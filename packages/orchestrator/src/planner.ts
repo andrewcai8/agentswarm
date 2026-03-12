@@ -3,6 +3,7 @@
 import type { Handoff, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
+import { WeightedRoundRobinSelector } from "./llm-routing.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import type { SweepResult } from "./reconciler.js";
@@ -19,7 +20,6 @@ import {
   readRepoState,
   sleep,
   slugifyForBranch,
-  WeightedRoundRobinSelector,
 } from "./shared.js";
 import { DEFAULT_SUBPLANNER_CONFIG, type Subplanner, shouldDecompose } from "./subplanner.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -167,16 +167,19 @@ export class Planner {
     this.tracer = tracer;
   }
 
+  private selectPiEndpoint(): PlannerEndpoint | undefined {
+    return this.plannerEndpointSelector?.next();
+  }
+
   private async initSession(): Promise<void> {
     if (this.piSession) return;
 
     logger.info("Initializing Pi agent session for planner");
-    const llmEndpoint = this.plannerEndpointSelector?.next();
     this.piSession = await this.deps.createPlannerPiSession({
       systemPrompt: this.systemPrompt,
       targetRepoPath: this.targetRepoPath,
       llmConfig: this.config.llm,
-      llmEndpoint,
+      llmEndpoint: this.selectPiEndpoint(),
     });
     this.lastTotalTokens = 0;
     logger.info("Pi agent session ready");

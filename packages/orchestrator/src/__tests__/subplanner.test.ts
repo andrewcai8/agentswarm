@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import type { Handoff, Task } from "@longshot/core";
-import { parseLLMTaskArray, slugifyForBranch, WeightedRoundRobinSelector } from "../shared.js";
+import type { OrchestratorConfig } from "../config.js";
+import { WeightedRoundRobinSelector } from "../llm-routing.js";
+import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";
 import type { SubplannerConfig } from "../subplanner.js";
 import {
   aggregateHandoffs,
   createFailureHandoff,
   DEFAULT_SUBPLANNER_CONFIG,
+  Subplanner,
   shouldDecompose,
 } from "../subplanner.js";
 
@@ -43,6 +46,46 @@ function makeHandoff(overrides?: Partial<Handoff>): Handoff {
       durationMs: 3000,
     },
     ...overrides,
+  };
+}
+
+function makeConfig(
+  endpoints: OrchestratorConfig["llm"]["endpoints"] = [
+    { name: "primary", endpoint: "https://primary.example.com", weight: 3 },
+    { name: "backup", endpoint: "https://backup.example.com", weight: 1 },
+  ],
+): OrchestratorConfig {
+  return {
+    maxWorkers: 2,
+    workerTimeout: 60,
+    mergeStrategy: "rebase",
+    llm: {
+      endpoints,
+      model: "gpt-test",
+      maxTokens: 2048,
+      temperature: 0.2,
+      timeoutMs: 10_000,
+    },
+    git: {
+      repoUrl: "https://github.com/example/repo.git",
+      mainBranch: "main",
+      branchPrefix: "worker/",
+    },
+    sandbox: {
+      imageTag: "latest",
+      cpuCores: 2,
+      memoryMb: 2048,
+      idleTimeout: 300,
+    },
+    targetRepoPath: "/tmp/repo",
+    pythonPath: "python3",
+    healthCheckInterval: 10,
+    readinessTimeoutMs: 120_000,
+    finalization: {
+      maxAttempts: 2,
+      enabled: true,
+      sweepTimeoutMs: 120_000,
+    },
   };
 }
 
@@ -334,6 +377,36 @@ describe("WeightedRoundRobinSelector", () => {
     assert.throws(() => new WeightedRoundRobinSelector([]), {
       message: /requires at least one item/,
     });
+  });
+});
+
+describe("Subplanner endpoint selection", () => {
+  it("rotates planner-style Pi sessions across weighted endpoints", () => {
+    const subplanner = new Subplanner(
+      makeConfig(),
+      DEFAULT_SUBPLANNER_CONFIG,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      "subplanner prompt",
+    );
+
+    const internals = subplanner as unknown as {
+      selectPiEndpoint: () => { name: string } | undefined;
+    };
+    const picks = Array.from({ length: 8 }, () => internals.selectPiEndpoint()?.name);
+
+    assert.deepStrictEqual(picks, [
+      "primary",
+      "primary",
+      "backup",
+      "primary",
+      "primary",
+      "primary",
+      "backup",
+      "primary",
+    ]);
   });
 });
 

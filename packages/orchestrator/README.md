@@ -14,7 +14,7 @@ The package is organized in 7 dependency layers, each building on the one below.
 |-------|-------|---------------|
 | 0 — Foundation | `config.ts`, `shared.ts` | Env config, repo state reading, Pi session helpers, concurrency primitives |
 | 1 — Data | `task-queue.ts`, `scope-tracker.ts` | Task state machine + priority queue, file-lock tracking |
-| 2 — LLM | `llm-client.ts` | Multi-endpoint routing, latency-adaptive weighting, health tracking |
+| 2 — LLM | `llm-routing.ts`, `llm-client.ts` | Endpoint selection helpers, latency-adaptive weighting, health tracking |
 | 3 — Workers | `worker-pool.ts` | Ephemeral model: spawns `spawn_sandbox.py` per task |
 | 4 — Merge | `merge-queue.ts` | Priority queue, conflict retry with rebase, background drain |
 | 5 — Planning | `planner.ts`, `subplanner.ts` | Root loop (iterative LLM + delta context), recursive decomposer |
@@ -26,7 +26,8 @@ The package is organized in 7 dependency layers, each building on the one below.
 | File | Description |
 |------|-------------|
 | `config.ts` | Parses all env vars into `OrchestratorConfig`. Supports single (`LLM_BASE_URL`) and multi-endpoint (`LLM_ENDPOINTS`) LLM config |
-| `shared.ts` | `readRepoState`, `parsePlannerResponse`, `ConcurrencyLimiter`, `GitMutex`, `WeightedRoundRobinSelector`, `slugifyForBranch`, Pi session factory |
+| `shared.ts` | `readRepoState`, `parsePlannerResponse`, `ConcurrencyLimiter`, `GitMutex`, `slugifyForBranch`, Pi session factory |
+| `llm-routing.ts` | `WeightedRoundRobinSelector` — smooth weighted selection for worker/planner endpoint choice |
 | `task-queue.ts` | `PriorityQueue` (min-heap) + `TaskQueue` (state machine with callbacks) |
 | `scope-tracker.ts` | `ScopeTracker` — maps active task IDs to locked file sets, detects overlaps |
 | `llm-client.ts` | `LLMClient` — weighted endpoint selection, EMA latency tracking, `waitForReady` probe |

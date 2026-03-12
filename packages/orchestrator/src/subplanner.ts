@@ -3,6 +3,7 @@
 import type { Handoff, Span, Task, Tracer } from "@longshot/core";
 import { createLogger } from "@longshot/core";
 import type { OrchestratorConfig } from "./config.js";
+import { WeightedRoundRobinSelector } from "./llm-routing.js";
 import type { MergeQueue } from "./merge-queue.js";
 import type { Monitor } from "./monitor.js";
 import {
@@ -30,6 +31,8 @@ const BACKOFF_BASE_MS = 2_000;
 const BACKOFF_MAX_MS = 30_000;
 const MAX_CONSECUTIVE_ERRORS = 5;
 const MAX_SUBPLANNER_ITERATIONS = 20;
+
+type SubplannerEndpoint = OrchestratorConfig["llm"]["endpoints"][number];
 
 function collectCompletedHandoffs(
   pending: { subtask: Task; handoff: Handoff }[],
@@ -182,6 +185,7 @@ export class Subplanner {
   private systemPrompt: string;
   private targetRepoPath: string;
   private tracer: Tracer | null = null;
+  private piEndpointSelector: WeightedRoundRobinSelector<SubplannerEndpoint> | null;
 
   private dispatchLimiter: ConcurrencyLimiter;
 
@@ -211,6 +215,8 @@ export class Subplanner {
     this.monitor = monitor;
     this.systemPrompt = systemPrompt;
     this.targetRepoPath = config.targetRepoPath;
+    this.piEndpointSelector =
+      config.llm.endpoints.length > 0 ? new WeightedRoundRobinSelector(config.llm.endpoints) : null;
 
     this.dispatchLimiter = new ConcurrencyLimiter(config.maxWorkers);
 
@@ -222,6 +228,10 @@ export class Subplanner {
 
   setTracer(tracer: Tracer): void {
     this.tracer = tracer;
+  }
+
+  private selectPiEndpoint(): SubplannerEndpoint | undefined {
+    return this.piEndpointSelector?.next();
   }
 
   async decomposeAndExecute(
@@ -270,6 +280,7 @@ export class Subplanner {
         systemPrompt: this.systemPrompt,
         targetRepoPath: this.targetRepoPath,
         llmConfig: this.config.llm,
+        llmEndpoint: this.selectPiEndpoint(),
       });
 
       while (iteration < MAX_SUBPLANNER_ITERATIONS) {

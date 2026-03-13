@@ -24,7 +24,7 @@
     "build": "tsc",
     "dev": "tsc -b --watch --preserveWatchOutput",
     "typecheck": "tsc --noEmit",
-    "test": "tsc && node --test dist/__tests__/*.test.js",
+    "test": "tsc --build --force && node --test dist/__tests__/*.test.js",
     "clean": "rm -rf dist",
     "start": "node dist/main.js"
   }

@@ -16,6 +16,6 @@
     "typecheck": "tsc --noEmit",
     "dev": "tsc -b --watch --preserveWatchOutput",
     "clean": "rm -rf dist",
-    "test": "tsc && node --test dist/__tests__/*.test.js"
+    "test": "tsc --build --force && node --test dist/__tests__/*.test.js"
   }
 }

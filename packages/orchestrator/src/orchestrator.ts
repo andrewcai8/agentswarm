@@ -448,7 +448,7 @@ export async function createOrchestrator(
 
           if (cb?.onFinalizationAttempt) cb.onFinalizationAttempt(attempt, sweepResult);
 
-          finalBuildOk = sweepResult.buildOk;
+          finalBuildOk = sweepResult.buildOk && sweepResult.buildRunOk;
           finalTestsOk = sweepResult.testsOk;
 
           // Step 4: Check branch completeness
@@ -457,6 +457,7 @@ export async function createOrchestrator(
 
           if (
             sweepResult.buildOk &&
+            sweepResult.buildRunOk &&
             sweepResult.testsOk &&
             !sweepResult.hasConflictMarkers &&
             allMerged
@@ -468,6 +469,7 @@ export async function createOrchestrator(
           logger.info("Finalization sweep found issues", {
             attempt,
             buildOk: sweepResult.buildOk,
+            buildRunOk: sweepResult.buildRunOk,
             testsOk: sweepResult.testsOk,
             hasConflictMarkers: sweepResult.hasConflictMarkers,
             conflictFiles: sweepResult.conflictFiles.length,
@@ -479,6 +481,7 @@ export async function createOrchestrator(
           if (sweepResult.fixTasks.length === 0 && allMerged) {
             logger.warn("Sweep found failures but generated no fix tasks — cannot self-heal", {
               buildOk: sweepResult.buildOk,
+              buildRunOk: sweepResult.buildRunOk,
               testsOk: sweepResult.testsOk,
               hasConflictMarkers: sweepResult.hasConflictMarkers,
             });

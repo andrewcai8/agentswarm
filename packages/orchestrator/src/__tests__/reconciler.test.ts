@@ -121,6 +121,7 @@ describe("Reconciler", () => {
     const result = await reconciler.sweep();
 
     assert.strictEqual(result.buildOk, true);
+    assert.strictEqual(result.buildRunOk, true);
     assert.strictEqual(result.testsOk, true);
     assert.strictEqual(result.hasConflictMarkers, false);
     assert.strictEqual(result.fixTasks.length, 0);
@@ -174,11 +175,125 @@ describe("Reconciler", () => {
     const result = await reconciler.sweep();
 
     assert.strictEqual(result.buildOk, false);
+    assert.strictEqual(result.buildRunOk, true);
     assert.strictEqual(result.fixTasks.length, 1);
     const firstTask = result.fixTasks[0];
     assert.ok(firstTask);
     assert.match(firstTask.description, /Fix compile errors/);
     assert.deepStrictEqual(tokenUsage, [15]);
+  });
+
+  it("treats generic npm build failures as real failures (not missing-script skips)", async () => {
+    const monitor = { recordTokenUsage: () => {} };
+    const mergeQueue = { getMergeStats: () => ({ totalMerged: 0 }) };
+    let llmCalled = false;
+
+    const runCommand: ReconcilerDeps["runCommand"] = async (cmd, args) => {
+      if (cmd === "npx") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "npm" && args[0] === "run") {
+        return {
+          stdout: "",
+          stderr: "npm ERR! code ELIFECYCLE\nnpm ERR! command failed with exit code 1",
+          code: 1,
+        };
+      }
+      if (cmd === "npm" && args[0] === "test") {
+        return { stdout: "tests ok", stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "grep") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "git" && args[0] === "log") {
+        return { stdout: "abc123 commit", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const reconciler = new Reconciler(
+      baseConfig(),
+      { intervalMs: 1_000, maxFixTasks: 5 },
+      {} as TaskQueue,
+      mergeQueue as never,
+      monitor as never,
+      "system prompt",
+      {
+        runCommand,
+        completeLLM: async () => {
+          llmCalled = true;
+          return {
+            content: "[]",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+            endpoint: "primary",
+            latencyMs: 1,
+          };
+        },
+      },
+    );
+
+    const result = await reconciler.sweep();
+    assert.strictEqual(result.buildOk, true);
+    assert.strictEqual(result.buildRunOk, false);
+    assert.strictEqual(llmCalled, true);
+  });
+
+  it("accepts missing build script output as not configured", async () => {
+    const monitor = { recordTokenUsage: () => {} };
+    const mergeQueue = { getMergeStats: () => ({ totalMerged: 0 }) };
+    let llmCalled = false;
+
+    const runCommand: ReconcilerDeps["runCommand"] = async (cmd, args) => {
+      if (cmd === "npx") {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (cmd === "npm" && args[0] === "run") {
+        return {
+          stdout: "",
+          stderr: 'npm ERR! Missing script: "build"',
+          code: 1,
+        };
+      }
+      if (cmd === "npm" && args[0] === "test") {
+        return { stdout: "tests ok", stderr: "", code: 0 };
+      }
+      if (cmd === "git" && args[0] === "grep") {
+        return { stdout: "", stderr: "", code: 1 };
+      }
+      if (cmd === "git" && args[0] === "log") {
+        return { stdout: "abc123 commit", stderr: "", code: 0 };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+
+    const reconciler = new Reconciler(
+      baseConfig(),
+      { intervalMs: 1_000, maxFixTasks: 5 },
+      {} as TaskQueue,
+      mergeQueue as never,
+      monitor as never,
+      "system prompt",
+      {
+        runCommand,
+        completeLLM: async () => {
+          llmCalled = true;
+          return {
+            content: "[]",
+            usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+            finishReason: "stop",
+            endpoint: "primary",
+            latencyMs: 1,
+          };
+        },
+      },
+    );
+
+    const result = await reconciler.sweep();
+    assert.strictEqual(result.buildOk, true);
+    assert.strictEqual(result.buildRunOk, true);
+    assert.strictEqual(result.testsOk, true);
+    assert.strictEqual(llmCalled, false);
   });
 
   it("start and stop toggle running state", () => {

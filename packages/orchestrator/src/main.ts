@@ -119,9 +119,10 @@ async function main(): Promise<void> {
             taskIds: result.fixTasks.map((t) => t.id),
           });
         }
-        if (!result.buildOk || !result.testsOk || result.hasConflictMarkers) {
+        if (!result.buildOk || !result.buildRunOk || !result.testsOk || result.hasConflictMarkers) {
           logger.info("Reconciler sweep health", {
             buildOk: result.buildOk,
+            buildRunOk: result.buildRunOk,
             testsOk: result.testsOk,
             hasConflictMarkers: result.hasConflictMarkers,
             conflictFiles: result.conflictFiles.length,
@@ -170,6 +171,7 @@ async function main(): Promise<void> {
         logger.info("Finalization attempt", {
           attempt,
           buildOk: sweepResult.buildOk,
+          buildRunOk: sweepResult.buildRunOk,
           testsOk: sweepResult.testsOk,
           hasConflictMarkers: sweepResult.hasConflictMarkers,
           conflictFiles: sweepResult.conflictFiles.length,

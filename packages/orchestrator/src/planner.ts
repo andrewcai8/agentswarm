@@ -590,6 +590,10 @@ export class Planner {
       if (!sr.buildOk && sr.buildOutput) {
         msg += ` — errors:\n\`\`\`\n${sr.buildOutput.slice(0, 2000)}\n\`\`\``;
       }
+      msg += `\nBuild Script: ${sr.buildRunOk ? "PASS" : "FAIL"}`;
+      if (!sr.buildRunOk && sr.buildRunOutput) {
+        msg += ` — output:\n\`\`\`\n${sr.buildRunOutput.slice(0, 2000)}\n\`\`\``;
+      }
       msg += `\nTests: ${sr.testsOk ? "PASS" : "FAIL"}`;
       if (!sr.testsOk && sr.testOutput) {
         msg += ` — output:\n\`\`\`\n${sr.testOutput.slice(0, 2000)}\n\`\`\``;
@@ -602,7 +606,12 @@ export class Planner {
     }
 
     msg += `Continue planning. Review new handoffs and state changes. Rewrite your scratchpad and emit the next batch of tasks. Task ID deduplication is handled automatically — do not re-emit previously used IDs.`;
-    if (this.lastSweepResult && (!this.lastSweepResult.buildOk || !this.lastSweepResult.testsOk)) {
+    if (
+      this.lastSweepResult &&
+      (!this.lastSweepResult.buildOk ||
+        !this.lastSweepResult.buildRunOk ||
+        !this.lastSweepResult.testsOk)
+    ) {
       msg += ` Build/tests are failing — emit targeted fix tasks.`;
     }
     msg += `\n`;

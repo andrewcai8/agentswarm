@@ -78,12 +78,28 @@ export interface ReconcilerDeps {
 
 export interface SweepResult {
   buildOk: boolean;
+  buildRunOk: boolean;
   testsOk: boolean;
   hasConflictMarkers: boolean;
   buildOutput: string;
+  buildRunOutput: string;
   testOutput: string;
   conflictFiles: string[];
   fixTasks: Task[];
+}
+
+function isMissingNpmScript(output: string, scriptName: string): boolean {
+  if (!output) {
+    return false;
+  }
+
+  const normalized = output.toLowerCase();
+  const target = scriptName.toLowerCase();
+  return (
+    normalized.includes(`missing script: ${target}`) ||
+    normalized.includes(`missing script: "${target}"`) ||
+    normalized.includes(`missing script: '${target}'`)
+  );
 }
 
 /**
@@ -251,9 +267,7 @@ export class Reconciler {
     );
     const buildRunOutput = buildRunResult.stdout + buildRunResult.stderr;
     const buildRunNotConfigured =
-      /Missing script|npm error|ERR!/i.test(buildRunOutput) &&
-      buildRunResult.code !== 0 &&
-      !buildRunOutput.includes("error TS");
+      buildRunResult.code !== 0 && isMissingNpmScript(buildRunOutput, "build");
     const buildRunOk = buildRunNotConfigured || buildRunResult.code === 0;
     logger.debug("npm run build result", {
       exitCode: buildRunResult.code,
@@ -321,9 +335,11 @@ export class Reconciler {
 
       return {
         buildOk: true,
+        buildRunOk: true,
         testsOk: true,
         hasConflictMarkers: false,
         buildOutput: "",
+        buildRunOutput: "",
         testOutput: "",
         conflictFiles: [],
         fixTasks: [],
@@ -348,9 +364,11 @@ export class Reconciler {
       sweepSpan?.end();
       return {
         buildOk,
+        buildRunOk,
         testsOk,
         hasConflictMarkers,
         buildOutput: "",
+        buildRunOutput: "",
         testOutput: "",
         conflictFiles: [],
         fixTasks: [],
@@ -439,9 +457,11 @@ export class Reconciler {
       sweepSpan?.end();
       return {
         buildOk,
+        buildRunOk,
         testsOk,
         hasConflictMarkers,
         buildOutput: buildOk ? "" : buildOutput.slice(0, 8000),
+        buildRunOutput: buildRunOk ? "" : buildRunOutput.slice(0, 8000),
         testOutput: testsOk ? "" : testOutput.slice(0, 8000),
         conflictFiles,
         fixTasks: [],
@@ -499,9 +519,11 @@ export class Reconciler {
 
     return {
       buildOk,
+      buildRunOk,
       testsOk,
       hasConflictMarkers,
       buildOutput: buildOk ? "" : buildOutput.slice(0, 8000),
+      buildRunOutput: buildRunOk ? "" : buildRunOutput.slice(0, 8000),
       testOutput: testsOk ? "" : testOutput.slice(0, 8000),
       conflictFiles,
       fixTasks: tasks,

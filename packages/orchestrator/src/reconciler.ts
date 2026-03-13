@@ -132,6 +132,7 @@ export class Reconciler {
   private errorCallbacks: ((error: Error) => void)[];
   private setTimeoutFn: typeof setTimeout;
   private clearTimeoutFn: typeof clearTimeout;
+  private inFlightSweep: Promise<SweepResult> | null;
 
   private recentFixScopes: Set<string> = new Set();
 
@@ -178,6 +179,7 @@ export class Reconciler {
 
     this.sweepCompleteCallbacks = [];
     this.errorCallbacks = [];
+    this.inFlightSweep = null;
   }
 
   setTracer(tracer: Tracer): void {
@@ -217,6 +219,24 @@ export class Reconciler {
    * Run a single sweep: check build + tests, create fix tasks if needed.
    */
   async sweep(): Promise<SweepResult> {
+    if (this.inFlightSweep) {
+      logger.info("Sweep already in progress — joining existing run");
+      return this.inFlightSweep;
+    }
+
+    const sweepPromise = this.runSweepInternal();
+    this.inFlightSweep = sweepPromise;
+
+    try {
+      return await sweepPromise;
+    } finally {
+      if (this.inFlightSweep === sweepPromise) {
+        this.inFlightSweep = null;
+      }
+    }
+  }
+
+  private async runSweepInternal(): Promise<SweepResult> {
     logger.info("Starting reconciler sweep");
     const sweepSpan = this.tracer?.startSpan("reconciler.sweep", { agentId: "reconciler" });
 

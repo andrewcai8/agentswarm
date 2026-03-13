@@ -47,6 +47,55 @@ function isRawTaskInput(value: unknown): value is RawTaskInput {
   );
 }
 
+function sanitizeRawTaskInput(value: unknown): RawTaskInput | null {
+  if (!isRawTaskInput(value)) {
+    return null;
+  }
+
+  const description = value.description.trim();
+  if (!description) {
+    return null;
+  }
+
+  const sanitized: RawTaskInput = { description };
+
+  if (typeof value.id === "string" && value.id.trim().length > 0) {
+    sanitized.id = value.id.trim();
+  }
+
+  if (typeof value.acceptance === "string" && value.acceptance.trim().length > 0) {
+    sanitized.acceptance = value.acceptance;
+  }
+
+  if (typeof value.branch === "string" && value.branch.trim().length > 0) {
+    sanitized.branch = value.branch;
+  }
+
+  if (typeof value.priority === "number" && Number.isFinite(value.priority)) {
+    sanitized.priority = value.priority;
+  }
+
+  if (Array.isArray(value.scope)) {
+    const scope = value.scope.filter((entry): entry is string => typeof entry === "string");
+    if (scope.length > 0) {
+      sanitized.scope = scope;
+    }
+  }
+
+  return sanitized;
+}
+
+function sanitizeRawTaskArray(tasksRaw: unknown[]): RawTaskInput[] {
+  const sanitized: RawTaskInput[] = [];
+  for (const candidate of tasksRaw) {
+    const task = sanitizeRawTaskInput(candidate);
+    if (task) {
+      sanitized.push(task);
+    }
+  }
+  return sanitized;
+}
+
 const MAX_FILE_TREE_ENTRIES = 300;
 const MAX_FEATURES_JSON_CHARS = 20_000;
 
@@ -295,8 +344,8 @@ function salvageTruncatedResponse(content: string): PlannerResponseResult {
         const objStr = remainder.slice(objStart, i + 1);
         try {
           const parsedTask: unknown = JSON.parse(objStr);
-          if (isRawTaskInput(parsedTask) && parsedTask.description) {
-            const task = parsedTask;
+          const task = sanitizeRawTaskInput(parsedTask);
+          if (task) {
             tasks.push(task);
           }
         } catch {
@@ -331,9 +380,10 @@ export function parsePlannerResponse(content: string): PlannerResponseResult {
         !Array.isArray(parsed) &&
         Array.isArray(parsed.tasks)
       ) {
+        const sanitizedTasks = sanitizeRawTaskArray(parsed.tasks);
         return {
           scratchpad: typeof parsed.scratchpad === "string" ? parsed.scratchpad : "",
-          tasks: parsed.tasks,
+          tasks: sanitizedTasks,
         };
       }
     }
@@ -379,11 +429,12 @@ export function parseLLMTaskArray(content: string): RawTaskInput[] {
     if (!Array.isArray(parsed)) {
       throw new Error("LLM response is not an array");
     }
+    const sanitized = sanitizeRawTaskArray(parsed);
     logger.debug("Parsed LLM task array", {
-      taskCount: parsed.length,
+      taskCount: sanitized.length,
       contentLength: content.length,
     });
-    return parsed;
+    return sanitized;
   } catch (error) {
     logger.error("Failed to parse LLM response as tasks", {
       content: content.slice(0, 500),

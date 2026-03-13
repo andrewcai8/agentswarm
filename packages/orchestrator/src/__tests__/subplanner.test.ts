@@ -3,7 +3,7 @@ import { describe, it } from "node:test";
 import type { Handoff, Task } from "@longshot/core";
 import type { OrchestratorConfig } from "../config.js";
 import { WeightedRoundRobinSelector } from "../llm-routing.js";
-import { parseLLMTaskArray, slugifyForBranch } from "../shared.js";
+import { parseLLMTaskArray, parsePlannerResponse, slugifyForBranch } from "../shared.js";
 import type { SubplannerConfig } from "../subplanner.js";
 import {
   aggregateHandoffs,
@@ -350,6 +350,48 @@ describe("parseLLMTaskArray", () => {
   it("parses empty array", () => {
     const result = parseLLMTaskArray("[]");
     assert.strictEqual(result.length, 0);
+  });
+
+  it("filters malformed entries and keeps valid tasks", () => {
+    const input =
+      '[{"description":"Keep me","scope":["a.ts",42]},{"scope":["missing-description.ts"]},5]';
+    const result = parseLLMTaskArray(input);
+    assert.strictEqual(result.length, 1);
+    const firstTask = result[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Keep me");
+    assert.deepStrictEqual(firstTask.scope, ["a.ts"]);
+  });
+
+  it("drops tasks with empty descriptions", () => {
+    const input = '[{"description":"   "},{"description":"Valid task"}]';
+    const result = parseLLMTaskArray(input);
+    assert.strictEqual(result.length, 1);
+    const firstTask = result[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Valid task");
+  });
+});
+
+describe("parsePlannerResponse", () => {
+  it("sanitizes tasks parsed from planner object payloads", () => {
+    const response = JSON.stringify({
+      scratchpad: "thinking...",
+      tasks: [
+        { description: "Valid task", scope: ["a.ts", 2] },
+        { scope: ["missing-description.ts"] },
+        { description: "   " },
+      ],
+    });
+
+    const parsed = parsePlannerResponse(response);
+    assert.strictEqual(parsed.scratchpad, "thinking...");
+    assert.strictEqual(parsed.tasks.length, 1);
+
+    const firstTask = parsed.tasks[0];
+    assert.ok(firstTask);
+    assert.strictEqual(firstTask.description, "Valid task");
+    assert.deepStrictEqual(firstTask.scope, ["a.ts"]);
   });
 });
 

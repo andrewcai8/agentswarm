@@ -206,4 +206,45 @@ describe("Monitor", () => {
       assert.strictEqual(firstTimedOutWorker.id, "worker-2");
     });
   });
+
+  describe("timeout callback deduplication", () => {
+    it("fires timeout callback once for repeated polls on the same timed-out worker", () => {
+      config = createConfig();
+      const startedAt = Date.now() - config.workerTimeout * 1000 - 10_000;
+      const worker = makeWorker({ id: "worker-timeout", startedAt });
+      monitor = new Monitor(config, createMockWorkerPool([worker]), createMockTaskQueue());
+
+      let callbackCount = 0;
+      monitor.onWorkerTimeout(() => {
+        callbackCount++;
+      });
+
+      monitor.poll();
+      monitor.poll();
+
+      assert.strictEqual(callbackCount, 1);
+    });
+
+    it("allows callback to fire again if worker recovers then times out again", () => {
+      config = createConfig();
+      const worker = makeWorker({
+        id: "worker-timeout-reset",
+        startedAt: Date.now() - config.workerTimeout * 1000 - 10_000,
+      });
+      monitor = new Monitor(config, createMockWorkerPool([worker]), createMockTaskQueue());
+
+      let callbackCount = 0;
+      monitor.onWorkerTimeout(() => {
+        callbackCount++;
+      });
+
+      monitor.poll();
+      worker.startedAt = Date.now();
+      monitor.poll();
+      worker.startedAt = Date.now() - config.workerTimeout * 1000 - 10_000;
+      monitor.poll();
+
+      assert.strictEqual(callbackCount, 2);
+    });
+  });
 });

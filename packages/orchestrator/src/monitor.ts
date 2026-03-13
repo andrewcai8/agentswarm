@@ -37,6 +37,7 @@ export class Monitor {
   private onTimeoutCallbacks: ((workerId: string, taskId: string) => void)[];
   private onEmptyDiffCallbacks: ((workerId: string, taskId: string) => void)[];
   private onMetricsCallbacks: ((snapshot: MetricsSnapshot) => void)[];
+  private reportedTimeouts: Set<string>;
 
   constructor(config: MonitorConfig, workerPool: WorkerPool, taskQueue: TaskQueue) {
     this.config = config;
@@ -55,6 +56,7 @@ export class Monitor {
     this.onTimeoutCallbacks = [];
     this.onEmptyDiffCallbacks = [];
     this.onMetricsCallbacks = [];
+    this.reportedTimeouts = new Set();
   }
 
   start(): void {
@@ -84,6 +86,7 @@ export class Monitor {
 
   poll(): void {
     const workers = this.workerPool.getAllWorkers();
+    const currentlyTimedOut = new Set<string>();
     logger.debug("Monitor poll", {
       workerCount: workers.length,
       pendingTasks: this.taskQueue.getPendingCount(),
@@ -94,6 +97,13 @@ export class Monitor {
     for (const worker of workers) {
       if (this.isWorkerTimedOut(worker)) {
         const taskId = worker.currentTask.id;
+        const timeoutKey = `${worker.id}:${taskId}`;
+        currentlyTimedOut.add(timeoutKey);
+
+        if (this.reportedTimeouts.has(timeoutKey)) {
+          continue;
+        }
+
         const elapsedSec = Math.round((Date.now() - worker.startedAt) / 1000);
         logger.debug("Worker timeout check failed", {
           workerId: worker.id,
@@ -105,6 +115,14 @@ export class Monitor {
         for (const cb of this.onTimeoutCallbacks) {
           cb(worker.id, taskId);
         }
+
+        this.reportedTimeouts.add(timeoutKey);
+      }
+    }
+
+    for (const key of this.reportedTimeouts) {
+      if (!currentlyTimedOut.has(key)) {
+        this.reportedTimeouts.delete(key);
       }
     }
 

@@ -22,7 +22,7 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc -b --watch --preserveWatchOutput",
-    "test": "tsc && node --test dist/__tests__/sandbox.test.js",
+    "test": "tsc && node --test dist/__tests__/*.test.js",
     "typecheck": "tsc --noEmit",
     "clean": "rm -rf dist"
   }

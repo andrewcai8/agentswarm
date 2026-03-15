@@ -21,7 +21,7 @@ const TASK_PATH = "/workspace/task.json";
 const RESULT_PATH = "/workspace/result.json";
 const WORK_DIR = "/workspace/repo";
 
-export const ARTIFACT_PATTERNS = [
+export const ARTIFACT_PATTERNS: readonly RegExp[] = [
   /^node_modules\//,
   /^\.next\//,
   /^dist\//,
@@ -326,7 +326,7 @@ export async function runWorker(): Promise<void> {
   // If the LLM returned zero tokens and the agent made zero tool calls,
   // the worker produced no useful work. Mark as failed so the planner
   // can re-plan instead of treating scaffold-only diffs as "complete".
-  const isEmptyResponse = tokensUsed === 0 && toolCallCount === 0;
+  const isEmptyResponse = detectEmptyResponse(tokensUsed, toolCallCount);
   if (isEmptyResponse) {
     log("WARNING: LLM returned empty response (0 tokens, 0 tool calls). Marking task as failed.");
   }
@@ -378,57 +378,37 @@ export async function runWorker(): Promise<void> {
   const filesCreatedRaw = safeExec(`git diff ${startSha} --diff-filter=A --name-only`, WORK_DIR);
   const filesChangedRaw = safeExec(`git diff ${startSha} --name-only`, WORK_DIR);
 
-  const filesChangedAll = filesChangedRaw ? filesChangedRaw.split("\n").filter(Boolean) : [];
+  const { linesAdded, linesRemoved, filesChanged } = aggregateNumstat(numstat);
   const filesCreatedAll = filesCreatedRaw ? filesCreatedRaw.split("\n").filter(Boolean) : [];
-
-  const filesChanged = filesChangedAll.filter((f) => !isArtifact(f));
   const filesCreated = filesCreatedAll.filter((f) => !isArtifact(f));
-
-  let linesAdded = 0;
-  let linesRemoved = 0;
-  if (numstat) {
-    for (const line of numstat.split("\n")) {
-      const parts = line.split("\t");
-      const [addedRaw, removedRaw, filePath] = parts;
-      if (addedRaw && removedRaw && filePath) {
-        if (isArtifact(filePath)) continue;
-        const added = parseInt(addedRaw, 10);
-        const removed = parseInt(removedRaw, 10);
-        if (!Number.isNaN(added)) linesAdded += added;
-        if (!Number.isNaN(removed)) linesRemoved += removed;
-      }
-    }
-  }
 
   const filesModified = filesChanged.length - filesCreated.length;
 
-  const handoff: Handoff = {
-    taskId: task.id,
-    status: isEmptyResponse ? "failed" : "complete",
-    summary: isEmptyResponse
-      ? "Task failed: LLM returned empty response (0 tokens, 0 tool calls). Possible API/endpoint failure."
-      : lastAssistantMessage || "Task completed (no final message captured).",
-    diff,
-    filesChanged,
-    concerns: isEmptyResponse
-      ? ["Empty LLM response — possible API failure or model endpoint issue"]
-      : buildExitCode !== null && buildExitCode !== 0
-        ? [`Post-agent build check failed (tsc exit code ${buildExitCode})`]
-        : [],
-    suggestions: isEmptyResponse
-      ? ["Check LLM endpoint connectivity", "Verify model is available in sandbox environment"]
-      : [],
-    buildExitCode,
-    metrics: {
-      linesAdded,
-      linesRemoved,
-      filesCreated: filesCreated.length,
-      filesModified: Math.max(0, filesModified),
-      tokensUsed,
-      toolCallCount,
-      durationMs: Date.now() - startTime,
-    },
-  };
+  const durationMs = Date.now() - startTime;
+  const handoff: Handoff = isEmptyResponse
+    ? { ...buildEmptyResponseHandoff(task.id, durationMs), diff }
+    : {
+        taskId: task.id,
+        status: "complete",
+        summary: lastAssistantMessage || "Task completed (no final message captured).",
+        diff,
+        filesChanged,
+        concerns:
+          buildExitCode !== null && buildExitCode !== 0
+            ? [`Post-agent build check failed (tsc exit code ${buildExitCode})`]
+            : [],
+        suggestions: [],
+        buildExitCode,
+        metrics: {
+          linesAdded,
+          linesRemoved,
+          filesCreated: filesCreated.length,
+          filesModified: Math.max(0, filesModified),
+          tokensUsed,
+          toolCallCount,
+          durationMs,
+        },
+      };
 
   workerSpan?.setAttributes({
     toolCallCount,
